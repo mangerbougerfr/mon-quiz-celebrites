@@ -7,7 +7,7 @@ import time
 # --- CONFIGURATION ---
 API_KEY = "266f486999f6f5487f4ee8f974607538"  # <--- REMETS TA CLÉ ICI !!!
 BASE_URL = "https://api.themoviedb.org/3"
-IMAGE_URL = "https://image.tmdb.org/t/p/w780" # Bonne qualité d'image
+IMAGE_URL = "https://image.tmdb.org/t/p/w780" # Bonne qualité
 GAME_DURATION = 30 
 
 st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
@@ -67,21 +67,30 @@ def fetch_popular_movies(page_num):
 
 def get_random_scene_image(movie_id, default_path):
     """
-    Va chercher toutes les images du film et en prend une au hasard
-    pour éviter de toujours avoir l'image principale trop facile.
+    Va chercher les images et filtre celles qui contiennent du texte (titre).
     """
     try:
+        # On récupère toutes les images du film
         url = f"{BASE_URL}/movie/{movie_id}/images?api_key={API_KEY}"
         data = requests.get(url).json()
         
-        if "backdrops" in data and len(data["backdrops"]) > 1:
-            # On exclut la première image (souvent l'affiche avec le titre)
-            scenes = data["backdrops"][1:] 
-            if scenes:
-                random_scene = random.choice(scenes)
-                return random_scene["file_path"]
+        if "backdrops" in data and len(data["backdrops"]) > 0:
+            # FILTRE MAGIQUE :
+            # On ne garde que les images où iso_639_1 est None (pas de langue spécifiée)
+            # Les images avec 'en', 'fr', etc. ont souvent le titre écrit dessus.
+            textless_scenes = [img for img in data["backdrops"] if img['iso_639_1'] is None]
+            
+            if textless_scenes:
+                # On en prend une au hasard parmi les "propres"
+                return random.choice(textless_scenes)["file_path"]
+            
+            # Si vraiment on a que des images avec du texte (rare), on évite au moins la première
+            elif len(data["backdrops"]) > 1:
+                return random.choice(data["backdrops"][1:])["file_path"]
+                
     except:
         pass
+    
     return default_path
 
 # --- LOGIQUE CÉLÉBRITÉS ---
@@ -113,9 +122,9 @@ def new_round_celeb():
     st.session_state.start_time = time.time()
     st.session_state.message = ""
 
-# --- LOGIQUE FILMS (POPULAIRE + SCÈNE ALÉATOIRE) ---
+# --- LOGIQUE FILMS ---
 def new_round_movie():
-    # MODIFICATION : Retour aux pages 1 à 20 (Les plus populaires)
+    # Pages 1 à 20 (Populaires)
     for _ in range(5):
         page = random.randint(1, 20) 
         raw = fetch_popular_movies(page)
@@ -132,7 +141,7 @@ def new_round_movie():
     choices = random.sample(others, 3) + [correct]
     random.shuffle(choices)
     
-    # On garde la logique de la scène aléatoire pour garder un peu de piment
+    # Appel de la fonction filtrée sans texte
     scene_image = get_random_scene_image(correct['id'], correct['backdrop_path'])
     
     st.session_state.current_item = correct
@@ -201,49 +210,4 @@ elif st.session_state.game_phase == "question":
 
     if st.session_state.current_image:
         if st.session_state.game_mode == "Célébrités":
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                st.image(f"{IMAGE_URL}{st.session_state.current_image}", use_container_width=True)
-        else:
-            st.image(f"{IMAGE_URL}{st.session_state.current_image}", use_container_width=True)
-
-    st.write("### Qui est-ce ?" if st.session_state.game_mode == "Célébrités" else "### Quel est ce film ?")
-    
-    c1, c2 = st.columns(2)
-    name_key = 'title' if st.session_state.game_mode == "Films" else 'name'
-    
-    for i, choice in enumerate(st.session_state.choices):
-        col = c1 if i < 2 else c2
-        with col:
-            if st.button(choice[name_key], key=f"btn_{choice['id']}", use_container_width=True):
-                check_answer(choice)
-                st.rerun()
-    
-    if st.session_state.game_mode == "Célébrités":
-        time.sleep(1)
-        st.rerun()
-
-# 3. RÉSULTAT
-elif st.session_state.game_phase == "resultat":
-    item = st.session_state.current_item
-    
-    if st.session_state.game_mode == "Célébrités":
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            st.image(f"{IMAGE_URL}{item['profile_path']}", width=150)
-    else:
-        st.image(f"{IMAGE_URL}{item['backdrop_path']}", use_container_width=True)
-
-    if "✅" in st.session_state.message:
-        st.success(st.session_state.message)
-    elif "⏰" in st.session_state.message:
-        st.warning(st.session_state.message)
-    else:
-        st.error(st.session_state.message)
-    
-    if st.button("Question Suivante ➡️", type="primary"):
-        if st.session_state.game_mode == "Célébrités":
-            new_round_celeb()
-        else:
-            new_round_movie()
-        st.rerun()
+            col1, col2, col3 = 
