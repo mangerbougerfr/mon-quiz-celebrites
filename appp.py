@@ -7,10 +7,11 @@ import time
 # --- CONFIGURATION ---
 API_KEY = "266f486999f6f5487f4ee8f974607538"  # <--- REMETS TA CLÉ ICI !!!
 BASE_URL = "https://api.themoviedb.org/3"
-IMAGE_URL = "https://image.tmdb.org/t/p/w780"
+IMAGE_URL = "https://image.tmdb.org/t/p/w185" # Format plus petit pour charger 16 images vite
 GAME_DURATION = 30 
+MEMORY_TIME = 60 # Temps de mémorisation en secondes
 
-st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
+st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="wide") # Layout wide pour la grille
 
 # --- CSS ---
 st.markdown("""
@@ -18,11 +19,26 @@ st.markdown("""
     .stButton button {
         height: 80px;
         font-size: 20px;
+        width: 100%;
     }
     div[data-testid="stImage"] {
         display: block;
         margin-left: auto;
         margin-right: auto;
+    }
+    /* Style pour le nom trouvé en vert */
+    .found-name {
+        color: #00FF00;
+        font-weight: bold;
+        text-align: center;
+        font-size: 18px;
+        margin-top: -10px;
+    }
+    /* Style pour cacher l'image (Noir total) */
+    .hidden-img img {
+        filter: brightness(0) !important;
+        -webkit-filter: brightness(0) !important; 
+        pointer-events: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -39,12 +55,12 @@ def display_circular_timer(remaining_time, total_time):
 
     svg_code = f"""
     <div style="display: flex; justify-content: center; margin-bottom: 10px;">
-        <svg width="100" height="100" viewBox="0 0 100 100">
-            <circle cx="50" cy="50" r="45" fill="none" stroke="#ddd" stroke-width="10" />
-            <circle cx="50" cy="50" r="45" fill="none" stroke="{color}" stroke-width="10"
+        <svg width="80" height="80" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="45" fill="none" stroke="#333" stroke-width="8" />
+            <circle cx="50" cy="50" r="45" fill="none" stroke="{color}" stroke-width="8"
                     stroke-dasharray="{283 * (percent/100)} 283"
                     transform="rotate(-90 50 50)" stroke-linecap="round" />
-            <text x="50" y="55" text-anchor="middle" font-size="25" font-weight="bold" fill="#333">{int(remaining_time)}</text>
+            <text x="50" y="55" text-anchor="middle" font-size="22" font-weight="bold" fill="white">{int(remaining_time)}</text>
         </svg>
     </div>
     """
@@ -76,27 +92,39 @@ def get_random_scene_image(movie_id, default_path):
     except: pass
     return default_path
 
-# --- LOGIQUE JEU ---
+def get_16_top_stars():
+    """Récupère 16 stars uniques et très connues pour le jeu de mémoire"""
+    stars = []
+    # On parcourt les 3 premières pages pour avoir la crème de la crème
+    for page in range(1, 4):
+        raw = fetch_popular_people(page)
+        for p in raw:
+            if (p['profile_path'] and is_latin(p['name']) and 
+                p.get('popularity', 0) > 15 and 
+                not p.get('adult', False)):
+                
+                # Vérifie qu'on n'a pas déjà cette personne
+                if p not in stars:
+                    stars.append(p)
+                
+                if len(stars) == 16:
+                    return stars
+    return stars
+
+# --- LOGIQUE QUIZ CLASSIQUE ---
 def new_round_celeb():
     page = random.randint(1, 10)
     raw = fetch_popular_people(page)
     valid = [p for p in raw if p['profile_path'] and is_latin(p['name']) and p.get('popularity', 0) > 5]
-    
     if len(valid) < 4:
-        st.warning("Pas assez de célébrités trouvées, réessaie.")
-        return
-
+        new_round_celeb(); return
     correct = random.choice(valid)
     same_gender = [p for p in valid if p['id'] != correct['id'] and p['gender'] == correct['gender']]
     others = same_gender if len(same_gender) >= 3 else [p for p in valid if p['id'] != correct['id']]
-    
     if len(others) < 3:
-        new_round_celeb() # Retry simple
-        return
-
+        new_round_celeb(); return
     choices = random.sample(others, 3) + [correct]
     random.shuffle(choices)
-    
     st.session_state.current_item = correct
     st.session_state.current_image = correct['profile_path']
     st.session_state.choices = choices
@@ -105,25 +133,19 @@ def new_round_celeb():
     st.session_state.message = ""
 
 def new_round_movie():
-    # Retry loop pour trouver des films valides
     valid = []
     for _ in range(5):
         page = random.randint(1, 20)
         raw = fetch_popular_movies(page)
         valid = [m for m in raw if m['backdrop_path'] and is_latin(m['title'])]
         if len(valid) >= 4: break
-    
     if len(valid) < 4:
-        st.error("Impossible de charger les films. Vérifie ta connexion ou ta clé API.")
-        return
-
+        st.error("Erreur API Films."); return
     correct = random.choice(valid)
     others = [m for m in valid if m['id'] != correct['id']]
     choices = random.sample(others, 3) + [correct]
     random.shuffle(choices)
-    
     scene_image = get_random_scene_image(correct['id'], correct['backdrop_path'])
-    
     st.session_state.current_item = correct
     st.session_state.current_image = scene_image
     st.session_state.choices = choices
@@ -133,7 +155,6 @@ def new_round_movie():
 def check_answer(selected, time_out=False):
     is_movie = st.session_state.game_mode == "Films"
     name_key = 'title' if is_movie else 'name'
-    
     if time_out:
         st.session_state.message = f"⏰ TEMPS ÉCOULÉ ! C'était {st.session_state.current_item[name_key]}"
     elif selected['id'] == st.session_state.current_item['id']:
@@ -141,8 +162,44 @@ def check_answer(selected, time_out=False):
         st.session_state.message = f"✅ BRAVO ! C'est bien {selected[name_key]}"
     else:
         st.session_state.message = f"❌ RATÉ... C'était {st.session_state.current_item[name_key]}"
-    
     st.session_state.game_phase = "resultat"
+
+# --- LOGIQUE JEU MÉMOIRE ---
+def new_round_memory():
+    people = get_16_top_stars()
+    if len(people) < 16:
+        st.error("Pas assez de stars trouvées.")
+        return
+    random.shuffle(people)
+    st.session_state.memory_people = people
+    st.session_state.memory_found = [] # Liste des IDs trouvés
+    st.session_state.game_phase = "memorize" # memorize -> recall
+    st.session_state.start_time = time.time()
+    st.session_state.user_input = ""
+
+def check_memory_input():
+    user_text = st.session_state.input_memory.strip().lower()
+    
+    # On parcourt les 16 personnes
+    found_new = False
+    for p in st.session_state.memory_people:
+        # On vérifie si l'ID n'est pas déjà trouvé
+        if p['id'] not in st.session_state.memory_found:
+            # On découpe le nom complet en morceaux (ex: "Brad Pitt" -> ["brad", "pitt"])
+            names_parts = p['name'].lower().replace("-", " ").split()
+            
+            # Si le mot tapé est dans les parties du nom (ex: j'ai tapé "brad")
+            if user_text in names_parts and len(user_text) > 2:
+                st.session_state.memory_found.append(p['id'])
+                st.session_state.score += 1
+                found_new = True
+                # On ne break pas car deux personnes peuvent s'appeler pareil (Chris Evans / Chris Pratt)
+    
+    if found_new:
+        st.toast(f"✅ Bien joué ! ({user_text})", icon="🎉")
+    
+    # Reset input
+    st.session_state.input_memory = ""
 
 # --- STATE ---
 if 'score' not in st.session_state: st.session_state.score = 0
@@ -153,10 +210,13 @@ if 'current_image' not in st.session_state: st.session_state.current_image = Non
 if 'choices' not in st.session_state: st.session_state.choices = []
 if 'message' not in st.session_state: st.session_state.message = ""
 if 'start_time' not in st.session_state: st.session_state.start_time = 0
+# State Memory
+if 'memory_people' not in st.session_state: st.session_state.memory_people = []
+if 'memory_found' not in st.session_state: st.session_state.memory_found = []
 
 # --- INTERFACE ---
 st.sidebar.title("Menu")
-selected_mode = st.sidebar.radio("Choisis ton jeu :", ["Célébrités", "Films"])
+selected_mode = st.sidebar.radio("Choisis ton jeu :", ["Célébrités", "Films", "Mémoire (16 Visages)"])
 
 if selected_mode != st.session_state.game_mode:
     st.session_state.game_mode = selected_mode
@@ -164,47 +224,118 @@ if selected_mode != st.session_state.game_mode:
     st.session_state.score = 0
     st.rerun()
 
-st.title(f"🌟 Quiz {st.session_state.game_mode}")
-st.metric(label="Score", value=st.session_state.score)
+st.title(f"🌟 {st.session_state.game_mode}")
+
+# Affiche le score (sauf en phase mémoire où ça gène un peu)
+if st.session_state.game_mode == "Mémoire (16 Visages)" and st.session_state.game_phase == "recall":
+    st.metric("Célébrités trouvées", f"{len(st.session_state.memory_found)} / 16")
+elif st.session_state.game_mode != "Mémoire (16 Visages)":
+    st.metric("Score", st.session_state.score)
 
 # 1. ÉCRAN D'ACCUEIL
 if st.session_state.game_phase == "init":
     if st.button("LANCER LE JEU", type="primary"):
         if st.session_state.game_mode == "Célébrités":
             new_round_celeb()
-        else:
+        elif st.session_state.game_mode == "Films":
             new_round_movie()
+        else:
+            new_round_memory()
         st.rerun()
 
-# 2. PHASE DE QUESTION
+# ---------------------------------------------------------
+# JEU MÉMOIRE (16 VISAGES)
+# ---------------------------------------------------------
+elif st.session_state.game_mode == "Mémoire (16 Visages)":
+    
+    # --- PHASE 1 : MÉMORISATION ---
+    if st.session_state.game_phase == "memorize":
+        elapsed = time.time() - st.session_state.start_time
+        remaining = MEMORY_TIME - elapsed
+        
+        st.markdown(f"### 🧠 Mémorise ces visages ! ({int(remaining)}s)")
+        st.progress(max(0, remaining / MEMORY_TIME))
+        
+        # Grille 4x4
+        people = st.session_state.memory_people
+        for i in range(0, 16, 4): # 4 lignes
+            cols = st.columns(4)
+            for j in range(4): # 4 colonnes
+                if i + j < len(people):
+                    p = people[i+j]
+                    with cols[j]:
+                        st.image(f"{IMAGE_URL}{p['profile_path']}", use_container_width=True)
+                        # Petit nom discret pour aider à mémoriser l'orthographe
+                        st.caption(p['name']) 
+
+        if remaining <= 0:
+            st.session_state.game_phase = "recall"
+            st.rerun()
+        else:
+            time.sleep(1)
+            st.rerun()
+
+    # --- PHASE 2 : RAPPEL (DEVINETTE) ---
+    elif st.session_state.game_phase == "recall":
+        
+        # Zone de saisie
+        st.text_input("Qui as-tu vu ? (Prénom ou Nom)", key="input_memory", on_change=check_memory_input)
+        
+        st.write("---")
+        
+        # Grille 4x4 avec logique de masquage
+        people = st.session_state.memory_people
+        for i in range(0, 16, 4):
+            cols = st.columns(4)
+            for j in range(4):
+                if i + j < len(people):
+                    p = people[i+j]
+                    with cols[j]:
+                        # Si trouvé : Image normale + Nom vert
+                        if p['id'] in st.session_state.memory_found:
+                            st.image(f"{IMAGE_URL}{p['profile_path']}", use_container_width=True)
+                            st.markdown(f"<div class='found-name'>{p['name']}</div>", unsafe_allow_html=True)
+                        
+                        # Si PAS trouvé : Image NOIRE (Silhouette)
+                        else:
+                            # On utilise une astuce HTML pour injecter la classe CSS 'hidden-img' qui met la luminosité à 0
+                            # On affiche l'image mais elle sera rendue noire par le CSS du début
+                            st.markdown(
+                                f"""
+                                <div class="hidden-img">
+                                    <img src="{IMAGE_URL}{p['profile_path']}" style="width:100%; border-radius: 5px;">
+                                </div>
+                                """, 
+                                unsafe_allow_html=True
+                            )
+        
+        if len(st.session_state.memory_found) == 16:
+            st.balloons()
+            st.success("INCROYABLE ! TU AS TOUT TROUVÉ !")
+            if st.button("Rejouer"):
+                new_round_memory()
+                st.rerun()
+
+# ---------------------------------------------------------
+# JEUX CLASSIQUES (QUIZ)
+# ---------------------------------------------------------
 elif st.session_state.game_phase == "question":
     
-    # --- AFFICHAGE SPÉCIFIQUE CÉLÉBRITÉS ---
     if st.session_state.game_mode == "Célébrités":
-        # Calcul du Timer
         elapsed = time.time() - st.session_state.start_time
         remaining = GAME_DURATION - elapsed
         display_circular_timer(max(0, remaining), GAME_DURATION)
-        
-        # Vérification fin du temps
         if remaining <= 0:
             check_answer(None, time_out=True)
             st.rerun()
-            
-        # Image (Format Portrait centré)
+
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.image(f"{IMAGE_URL}{st.session_state.current_image}", use_container_width=True)
+            st.image(f"https://image.tmdb.org/t/p/w500{st.session_state.current_image}", use_container_width=True)
 
-    # --- AFFICHAGE SPÉCIFIQUE FILMS ---
-    else:
-        # Pas de Timer, juste l'image (Format Paysage)
-        if st.session_state.current_image:
-            st.image(f"{IMAGE_URL}{st.session_state.current_image}", use_container_width=True)
-        else:
-            st.error("Erreur d'affichage de l'image.")
+    else: # Films
+        st.image(f"https://image.tmdb.org/t/p/w780{st.session_state.current_image}", use_container_width=True)
 
-    # --- BOUTONS DE RÉPONSE (COMMUN) ---
     st.write("### Qui est-ce ?" if st.session_state.game_mode == "Célébrités" else "### Quel est ce film ?")
     
     c1, c2 = st.columns(2)
@@ -218,22 +349,19 @@ elif st.session_state.game_phase == "question":
                     check_answer(choice)
                     st.rerun()
 
-    # --- RAFRAICHISSEMENT AUTOMATIQUE (UNIQUEMENT POUR LE TIMER) ---
     if st.session_state.game_mode == "Célébrités":
         time.sleep(1)
         st.rerun()
 
-# 3. PHASE RÉSULTAT
 elif st.session_state.game_phase == "resultat":
     item = st.session_state.current_item
     
     if st.session_state.game_mode == "Célébrités":
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            st.image(f"{IMAGE_URL}{item['profile_path']}", width=150)
+            st.image(f"https://image.tmdb.org/t/p/w500{item['profile_path']}", width=150)
     else:
-        # Affiche l'image de fond principale (souvent avec le titre) pour la réponse
-        st.image(f"{IMAGE_URL}{item['backdrop_path']}", use_container_width=True)
+        st.image(f"https://image.tmdb.org/t/p/w780{item['backdrop_path']}", use_container_width=True)
 
     if "✅" in st.session_state.message:
         st.success(st.session_state.message)
