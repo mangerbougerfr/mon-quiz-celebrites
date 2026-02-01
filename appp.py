@@ -194,13 +194,21 @@ def new_round_memory():
     random.shuffle(people)
     st.session_state.memory_people = people
     st.session_state.memory_found = []
-    st.session_state.memory_revealed_faces = [] # Pour les indices (visages seuls)
-    st.session_state.show_solution = False # Pour tout révéler
+    st.session_state.memory_revealed_faces = [] 
+    st.session_state.show_solution = False 
     st.session_state.game_phase = "memorize"
     st.session_state.start_time = time.time()
-    st.session_state.input_memory = ""
+    
+    # CORRECTION DU BUG ICI :
+    # Au lieu de faire input_memory = "", on supprime la clé pour éviter le conflit
+    if 'input_memory' in st.session_state:
+        del st.session_state.input_memory
 
 def check_memory_input():
+    # On vérifie d'abord si la clé existe pour éviter une erreur
+    if 'input_memory' not in st.session_state:
+        return
+
     user_text = st.session_state.input_memory.strip().lower()
     found_new = False
     for p in st.session_state.memory_people:
@@ -211,6 +219,7 @@ def check_memory_input():
                 st.session_state.score += 1
                 found_new = True
     if found_new: st.toast(f"✅ Trouvé : {user_text}", icon="🎉")
+    # Pour reset l'input pendant le jeu, on peut utiliser l'assignation ici car on est dans le callback
     st.session_state.input_memory = ""
 
 def reveal_face(person_id):
@@ -313,22 +322,21 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                     p = people[i+j]
                     with cols[j]:
                         
-                        # CAS 1: TROUVÉ PAR LE JOUEUR
+                        # CAS 1: TROUVÉ
                         if p['id'] in st.session_state.memory_found:
                             st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                             st.markdown(f"<div class='found-name'>{p['name']}</div>", unsafe_allow_html=True)
                         
-                        # CAS 2: SOLUTION DEMANDÉE (NON TROUVÉ)
+                        # CAS 2: SOLUTION DEMANDÉE
                         elif st.session_state.show_solution:
                             st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                             st.markdown(f"<div class='missed-name'>{p['name']}</div>", unsafe_allow_html=True)
 
-                        # CAS 3: INDICE DEMANDÉ (VISAGE SEUL)
+                        # CAS 3: INDICE
                         elif p['id'] in st.session_state.memory_revealed_faces:
                             st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
-                            # Pas de nom, c'est juste l'indice visuel
                         
-                        # CAS 4: CACHÉ (NOIR + BOUTON INDICE)
+                        # CAS 4: CACHÉ
                         else:
                             st.markdown(
                                 f"""<div class="hidden-img" style="display:flex; justify-content:center;">
