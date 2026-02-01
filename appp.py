@@ -7,24 +7,27 @@ import time
 # --- CONFIGURATION ---
 API_KEY = "266f486999f6f5487f4ee8f974607538"  # <--- REMETS TA CLÉ ICI !!!
 BASE_URL = "https://api.themoviedb.org/3"
-# On prend des images plus petites pour charger vite et prendre moins de place
 IMAGE_URL = "https://image.tmdb.org/t/p/w342" 
 GAME_DURATION = 30 
 MEMORY_TIME = 60 
 
-# MODIF 1 : Layout "centered" pour que la grille mémoire soit plus compacte
 st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
 
-# --- CSS (Pour réduire les marges et l'espacement) ---
+# --- CSS ---
 st.markdown("""
 <style>
     .stButton button {
-        height: 60px; /* Boutons un peu moins hauts */
+        height: 60px;
         font-size: 18px;
         width: 100%;
         margin-top: 0px;
     }
+    /* Force le centrage des images dans leur colonne */
     div[data-testid="stImage"] {
+        display: flex;
+        justify-content: center;
+    }
+    div[data-testid="stImage"] > img {
         display: block;
         margin-left: auto;
         margin-right: auto;
@@ -33,17 +36,20 @@ st.markdown("""
         color: #00FF00;
         font-weight: bold;
         text-align: center;
-        font-size: 14px; /* Police plus petite */
+        font-size: 13px;
         margin-top: -5px;
     }
     .hidden-img img {
         filter: brightness(0) !important;
         -webkit-filter: brightness(0) !important; 
         pointer-events: none;
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
     }
-    /* Réduire les espaces vides de Streamlit */
+    /* Réduire les espaces vides */
     .block-container {
-        padding-top: 2rem;
+        padding-top: 1rem;
         padding-bottom: 0rem;
     }
     div[data-testid="column"] {
@@ -62,7 +68,6 @@ def display_circular_timer(remaining_time, total_time):
     elif remaining_time > 5: color = "#FFC107"
     else: color = "#F44336"
 
-    # Timer un peu plus petit (80px -> 60px)
     svg_code = f"""
     <div style="display: flex; justify-content: center; margin-bottom: 10px;">
         <svg width="60" height="60" viewBox="0 0 100 100">
@@ -175,7 +180,7 @@ def new_round_memory():
     st.session_state.memory_found = []
     st.session_state.game_phase = "memorize"
     st.session_state.start_time = time.time()
-    st.session_state.input_memory = "" # Init input
+    st.session_state.input_memory = ""
 
 def check_memory_input():
     user_text = st.session_state.input_memory.strip().lower()
@@ -228,7 +233,7 @@ if st.session_state.game_phase == "init":
         st.rerun()
 
 # ---------------------------------------------------------
-# JEU MÉMOIRE
+# JEU MÉMOIRE (IMAGES RÉDUITES)
 # ---------------------------------------------------------
 elif st.session_state.game_mode == "Mémoire (16 Visages)":
     
@@ -240,14 +245,14 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
         st.progress(max(0, remaining / MEMORY_TIME))
         
         people = st.session_state.memory_people
-        # Grille compacte
         for i in range(0, 16, 4):
             cols = st.columns(4)
             for j in range(4):
                 if i + j < len(people):
                     p = people[i+j]
                     with cols[j]:
-                        st.image(f"{IMAGE_URL}{p['profile_path']}", use_container_width=True)
+                        # WIDTH=115 pour réduire la taille dans la grille
+                        st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                         st.caption(p['name'])
         
         if remaining <= 0:
@@ -270,11 +275,13 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                     p = people[i+j]
                     with cols[j]:
                         if p['id'] in st.session_state.memory_found:
-                            st.image(f"{IMAGE_URL}{p['profile_path']}", use_container_width=True)
+                            st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                             st.markdown(f"<div class='found-name'>{p['name']}</div>", unsafe_allow_html=True)
                         else:
                             st.markdown(
-                                f"""<div class="hidden-img"><img src="{IMAGE_URL}{p['profile_path']}" style="width:100%; border-radius: 5px;"></div>""", 
+                                f"""<div class="hidden-img" style="display:flex; justify-content:center;">
+                                    <img src="{IMAGE_URL}{p['profile_path']}" style="width:115px; border-radius: 5px;">
+                                </div>""", 
                                 unsafe_allow_html=True
                             )
         
@@ -286,7 +293,7 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                 st.rerun()
 
 # ---------------------------------------------------------
-# JEUX QUIZ (Célébrités & Films)
+# JEUX QUIZ (IMAGES CENTRÉES)
 # ---------------------------------------------------------
 elif st.session_state.game_phase == "question":
     
@@ -296,12 +303,18 @@ elif st.session_state.game_phase == "question":
         display_circular_timer(max(0, remaining), GAME_DURATION)
         if remaining <= 0: check_answer(None, time_out=True); st.rerun()
 
-        # MODIF: WIDTH=300 pour portrait (petit)
-        st.image(f"https://image.tmdb.org/t/p/w500{st.session_state.current_image}", width=300)
+        # CENTRAGE : On utilise 3 colonnes et on met l'image au milieu
+        c_left, c_center, c_right = st.columns([1, 2, 1])
+        with c_center:
+             # Width 300 pour portrait
+            st.image(f"https://image.tmdb.org/t/p/w500{st.session_state.current_image}", width=300)
 
     else: # Films
-        # MODIF: WIDTH=500 pour film (moyen)
-        st.image(f"https://image.tmdb.org/t/p/w780{st.session_state.current_image}", width=500)
+        # CENTRAGE : Idem
+        c_left, c_center, c_right = st.columns([1, 6, 1]) # Colonne milieu plus large pour film
+        with c_center:
+            # Width 500 pour film
+            st.image(f"https://image.tmdb.org/t/p/w780{st.session_state.current_image}", width=500)
 
     st.write("### Qui est-ce ?" if st.session_state.game_mode == "Célébrités" else "### Quel est ce film ?")
     
@@ -323,10 +336,13 @@ elif st.session_state.game_phase == "question":
 elif st.session_state.game_phase == "resultat":
     item = st.session_state.current_item
     
-    if st.session_state.game_mode == "Célébrités":
-        st.image(f"https://image.tmdb.org/t/p/w500{item['profile_path']}", width=200)
-    else:
-        st.image(f"https://image.tmdb.org/t/p/w780{item['backdrop_path']}", width=400)
+    # CENTRAGE RÉSULTAT AUSSI
+    c_left, c_center, c_right = st.columns([1, 2, 1])
+    with c_center:
+        if st.session_state.game_mode == "Célébrités":
+            st.image(f"https://image.tmdb.org/t/p/w500{item['profile_path']}", width=200)
+        else:
+            st.image(f"https://image.tmdb.org/t/p/w780{item['backdrop_path']}", width=400)
 
     if "✅" in st.session_state.message: st.success(st.session_state.message)
     elif "⏰" in st.session_state.message: st.warning(st.session_state.message)
