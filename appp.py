@@ -70,24 +70,17 @@ def get_random_scene_image(movie_id, default_path):
     Va chercher les images et filtre celles qui contiennent du texte (titre).
     """
     try:
-        # On récupère toutes les images du film
         url = f"{BASE_URL}/movie/{movie_id}/images?api_key={API_KEY}"
         data = requests.get(url).json()
         
         if "backdrops" in data and len(data["backdrops"]) > 0:
-            # FILTRE MAGIQUE :
-            # On ne garde que les images où iso_639_1 est None (pas de langue spécifiée)
-            # Les images avec 'en', 'fr', etc. ont souvent le titre écrit dessus.
+            # FILTRE : On ne garde que les images sans langue (souvent sans texte)
             textless_scenes = [img for img in data["backdrops"] if img['iso_639_1'] is None]
             
             if textless_scenes:
-                # On en prend une au hasard parmi les "propres"
                 return random.choice(textless_scenes)["file_path"]
-            
-            # Si vraiment on a que des images avec du texte (rare), on évite au moins la première
             elif len(data["backdrops"]) > 1:
-                return random.choice(data["backdrops"][1:])["file_path"]
-                
+                return random.choice(data["backdrops"][1:])["file_path"]      
     except:
         pass
     
@@ -141,7 +134,7 @@ def new_round_movie():
     choices = random.sample(others, 3) + [correct]
     random.shuffle(choices)
     
-    # Appel de la fonction filtrée sans texte
+    # Image filtrée
     scene_image = get_random_scene_image(correct['id'], correct['backdrop_path'])
     
     st.session_state.current_item = correct
@@ -201,13 +194,4 @@ if st.session_state.game_phase == "init":
 elif st.session_state.game_phase == "question":
     
     if st.session_state.game_mode == "Célébrités":
-        elapsed = time.time() - st.session_state.start_time
-        remaining = GAME_DURATION - elapsed
-        display_circular_timer(max(0, remaining), GAME_DURATION)
-        if remaining <= 0:
-            check_answer(None, time_out=True)
-            st.rerun()
-
-    if st.session_state.current_image:
-        if st.session_state.game_mode == "Célébrités":
-            col1, col2, col3 = 
+        elapsed 
