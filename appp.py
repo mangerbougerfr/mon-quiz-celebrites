@@ -10,7 +10,7 @@ BASE_URL = "https://api.themoviedb.org/3"
 IMAGE_URL = "https://image.tmdb.org/t/p/w500"
 GAME_DURATION = 30 
 
-st.set_page_config(page_title="Quiz Célébrités", page_icon="🎬", layout="centered")
+st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
 
 # --- CSS ---
 st.markdown("""
@@ -27,42 +27,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FONCTIONS ---
+# --- FONCTIONS UTILITAIRES ---
 def is_latin(text):
-    return bool(re.match(r'^[a-zA-Zà-üÀ-Ü\s\-\.\']+$', text))
-
-# On utilise le cache pour éviter de rappeler l'API quand le timer tourne
-@st.cache_data(ttl=3600)
-def fetch_people_from_page(page_num):
-    try:
-        url = f"{BASE_URL}/person/popular?api_key={API_KEY}&language=fr-FR&page={page_num}"
-        response = requests.get(url)
-        data = response.json()
-        if "results" in data:
-            return data["results"]
-        return []
-    except:
-        return []
-
-def get_valid_people():
-    # On essaie de trouver des gens valides sur 3 pages aléatoires différentes
-    # pour éviter de tourner en rond si une page est vide
-    for _ in range(3):
-        page = random.randint(1, 10) # Top 10 des pages pour avoir des gens connus
-        raw_people = fetch_people_from_page(page)
-        
-        valid_people = []
-        for p in raw_people:
-            # Filtres : Photo + Nom Latin + Popularité décente
-            if (p['profile_path'] and 
-                is_latin(p['name']) and 
-                p.get('popularity', 0) > 5): # J'ai baissé un peu la sévérité
-                valid_people.append(p)
-        
-        if len(valid_people) >= 4:
-            return valid_people
-            
-    return []
+    return bool(re.match(r'^[a-zA-Zà-üÀ-Ü0-9\s\-\.\':]+$', text))
 
 def display_circular_timer(remaining_time, total_time):
     percent = (remaining_time / total_time) * 100
@@ -83,116 +50,176 @@ def display_circular_timer(remaining_time, total_time):
     """
     st.markdown(svg_code, unsafe_allow_html=True)
 
-# --- ETAT DU JEU ---
-if 'current_person' not in st.session_state:
-    st.session_state.current_person = None
-if 'choices' not in st.session_state:
-    st.session_state.choices = []
-if 'score' not in st.session_state:
-    st.session_state.score = 0
-if 'game_phase' not in st.session_state:
-    st.session_state.game_phase = "init"
-if 'message' not in st.session_state:
-    st.session_state.message = ""
-if 'start_time' not in st.session_state:
-    st.session_state.start_time = 0
+# --- FONCTIONS API (CACHE) ---
+@st.cache_data(ttl=3600)
+def fetch_popular_people(page_num):
+    try:
+        url = f"{BASE_URL}/person/popular?api_key={API_KEY}&language=fr-FR&page={page_num}"
+        return requests.get(url).json().get("results", [])
+    except: return []
 
-# --- MOTEUR DU JEU ---
-def new_round():
-    people_list = get_valid_people()
-    
-    if not people_list or len(people_list) < 4:
-        st.error("Erreur de connexion API ou pas assez de résultats. Vérifie ta clé API.")
-        st.stop() # Arrête le script ici pour éviter la boucle infinie
+@st.cache_data(ttl=3600)
+def fetch_popular_movies(page_num):
+    try:
+        url = f"{BASE_URL}/movie/popular?api_key={API_KEY}&language=fr-FR&page={page_num}"
+        return requests.get(url).json().get("results", [])
+    except: return []
+
+# --- LOGIQUE CÉLÉBRITÉS ---
+def get_valid_people():
+    for _ in range(3):
+        page = random.randint(1, 10)
+        raw = fetch_popular_people(page)
+        valid = [p for p in raw if p['profile_path'] and is_latin(p['name']) and p.get('popularity', 0) > 5]
+        if len(valid) >= 4: return valid
+    return []
+
+def new_round_celeb():
+    people = get_valid_people()
+    if not people or len(people) < 4:
+        st.error("Erreur API Célébrités.")
         return
 
-    correct_person = random.choice(people_list)
-    correct_gender = correct_person['gender']
+    correct = random.choice(people)
+    same_gender = [p for p in people if p['id'] != correct['id'] and p['gender'] == correct['gender']]
+    others = same_gender if len(same_gender) >= 3 else [p for p in people if p['id'] != correct['id']]
     
-    same_gender_people = [p for p in people_list if p['id'] != correct_person['id'] and p['gender'] == correct_gender]
-    others = same_gender_people if len(same_gender_people) >= 3 else [p for p in people_list if p['id'] != correct_person['id']]
+    choices = random.sample(others, 3) + [correct]
+    random.shuffle(choices)
+    
+    st.session_state.current_item = correct
+    st.session_state.choices = choices
+    st.session_state.game_phase = "question"
+    st.session_state.start_time = time.time()
+    st.session_state.message = ""
 
-    if len(others) >= 3:
-        wrong_answers = random.sample(others, 3)
-        choices = wrong_answers + [correct_person]
-        random.shuffle(choices)
-        
-        st.session_state.current_person = correct_person
-        st.session_state.choices = choices
-        st.session_state.game_phase = "question"
-        st.session_state.start_time = time.time()
-        st.session_state.message = ""
-    else:
-        st.warning("Pas assez de données pour générer une question cohérente. Réessaie.")
+# --- LOGIQUE FILMS ---
+def get_valid_movies():
+    for _ in range(3):
+        page = random.randint(1, 20) # Plus large choix de films
+        raw = fetch_popular_movies(page)
+        # On veut des films avec une image de fond (backdrop) car l'affiche contient le titre !
+        valid = [m for m in raw if m['backdrop_path'] and is_latin(m['title'])]
+        if len(valid) >= 4: return valid
+    return []
 
-def check_answer(selected_person=None, time_out=False):
+def new_round_movie():
+    movies = get_valid_movies()
+    if not movies or len(movies) < 4:
+        st.error("Erreur API Films.")
+        return
+
+    correct = random.choice(movies)
+    others = [m for m in movies if m['id'] != correct['id']]
+    
+    choices = random.sample(others, 3) + [correct]
+    random.shuffle(choices)
+    
+    st.session_state.current_item = correct
+    st.session_state.choices = choices
+    st.session_state.game_phase = "question"
+    st.session_state.message = ""
+    # Pas de timer pour l'instant pour les films
+
+# --- GESTION DE LA RÉPONSE (COMMUNE) ---
+def check_answer(selected, time_out=False):
+    is_movie = st.session_state.game_mode == "Films"
+    name_key = 'title' if is_movie else 'name'
+    
     if time_out:
-        st.session_state.message = f"⏰ TEMPS ÉCOULÉ ! C'était {st.session_state.current_person['name']}"
-    elif selected_person['id'] == st.session_state.current_person['id']:
+        st.session_state.message = f"⏰ TEMPS ÉCOULÉ ! C'était {st.session_state.current_item[name_key]}"
+    elif selected['id'] == st.session_state.current_item['id']:
         st.session_state.score += 1
-        st.session_state.message = f"✅ BRAVO ! C'est bien {selected_person['name']}"
+        st.session_state.message = f"✅ BRAVO ! C'est bien {selected[name_key]}"
     else:
-        st.session_state.message = f"❌ RATÉ... C'était {st.session_state.current_person['name']}"
+        st.session_state.message = f"❌ RATÉ... C'était {st.session_state.current_item[name_key]}"
     
     st.session_state.game_phase = "resultat"
 
-# --- AFFICHAGE ---
-st.title("🌟 Quiz Célébrités")
+# --- INITIALISATION SESSION ---
+if 'score' not in st.session_state: st.session_state.score = 0
+if 'game_phase' not in st.session_state: st.session_state.game_phase = "init"
+if 'game_mode' not in st.session_state: st.session_state.game_mode = "Célébrités"
+if 'current_item' not in st.session_state: st.session_state.current_item = None
+if 'choices' not in st.session_state: st.session_state.choices = []
+if 'message' not in st.session_state: st.session_state.message = ""
+if 'start_time' not in st.session_state: st.session_state.start_time = 0
+
+# --- INTERFACE ---
+st.sidebar.title("Menu")
+selected_mode = st.sidebar.radio("Choisis ton jeu :", ["Célébrités", "Films"])
+
+# Reset si on change de mode
+if selected_mode != st.session_state.game_mode:
+    st.session_state.game_mode = selected_mode
+    st.session_state.game_phase = "init"
+    st.session_state.score = 0 # On remet le score à 0 si on change de jeu
+    st.rerun()
+
+st.title(f"🌟 Quiz {st.session_state.game_mode}")
 st.metric(label="Score", value=st.session_state.score)
 
-# 1. ÉCRAN D'ACCUEIL
+# 1. INIT
 if st.session_state.game_phase == "init":
-    if st.button("COMMENCER LE JEU", type="primary"):
-        new_round()
+    if st.button("LANCER LE JEU", type="primary"):
+        if st.session_state.game_mode == "Célébrités":
+            new_round_celeb()
+        else:
+            new_round_movie()
         st.rerun()
 
 # 2. QUESTION
 elif st.session_state.game_phase == "question":
     
-    # Calcul du temps
-    elapsed = time.time() - st.session_state.start_time
-    remaining = GAME_DURATION - elapsed
-    
-    # Affiche le timer
-    display_circular_timer(max(0, remaining), GAME_DURATION)
-    
-    # Vérifie si temps écoulé
-    if remaining <= 0:
-        check_answer(time_out=True)
-        st.rerun()
+    # Gestion Timer (Seulement pour Célébrités)
+    if st.session_state.game_mode == "Célébrités":
+        elapsed = time.time() - st.session_state.start_time
+        remaining = GAME_DURATION - elapsed
+        display_circular_timer(max(0, remaining), GAME_DURATION)
+        if remaining <= 0:
+            check_answer(None, time_out=True)
+            st.rerun()
 
-    # Affiche l'image
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.session_state.current_person:
-            p_path = st.session_state.current_person['profile_path']
-            st.image(f"{IMAGE_URL}{p_path}", use_container_width=True)
+    # Affichage Image
+    item = st.session_state.current_item
+    if item:
+        if st.session_state.game_mode == "Célébrités":
+            # Image verticale (Portrait)
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.image(f"{IMAGE_URL}{item['profile_path']}", use_container_width=True)
+        else:
+            # Image horizontale (Paysage/Backdrop) pour les films
+            st.image(f"{IMAGE_URL}{item['backdrop_path']}", use_container_width=True)
 
-    st.write("### Qui est cette personne ?")
+    st.write("### Qui est-ce ?" if st.session_state.game_mode == "Célébrités" else "### Quel est ce film ?")
     
-    # Affiche les boutons
-    if st.session_state.choices:
-        c1, c2 = st.columns(2)
-        for i, person in enumerate(st.session_state.choices):
-            col = c1 if i < 2 else c2
-            with col:
-                # IMPORTANT: On met une clé unique basée sur l'ID de la personne pour éviter les confusions
-                if st.button(person['name'], key=f"btn_{person['id']}", use_container_width=True):
-                    check_answer(person)
-                    st.rerun()
+    # Choix
+    c1, c2 = st.columns(2)
+    name_key = 'title' if st.session_state.game_mode == "Films" else 'name'
     
-    # Boucle de rafraichissement (placée à la toute fin)
-    if remaining > 0:
+    for i, choice in enumerate(st.session_state.choices):
+        col = c1 if i < 2 else c2
+        with col:
+            if st.button(choice[name_key], key=f"btn_{choice['id']}", use_container_width=True):
+                check_answer(choice)
+                st.rerun()
+    
+    # Rafraichissement Timer (Seulement Célébrités)
+    if st.session_state.game_mode == "Célébrités":
         time.sleep(1)
         st.rerun()
 
 # 3. RÉSULTAT
 elif st.session_state.game_phase == "resultat":
+    item = st.session_state.current_item
     
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        p_path = st.session_state.current_person['profile_path']
-        st.image(f"{IMAGE_URL}{p_path}", width=150)
+    if st.session_state.game_mode == "Célébrités":
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.image(f"{IMAGE_URL}{item['profile_path']}", width=150)
+    else:
+        st.image(f"{IMAGE_URL}{item['backdrop_path']}", use_container_width=True)
 
     if "✅" in st.session_state.message:
         st.success(st.session_state.message)
@@ -202,5 +229,8 @@ elif st.session_state.game_phase == "resultat":
         st.error(st.session_state.message)
     
     if st.button("Question Suivante ➡️", type="primary"):
-        new_round()
+        if st.session_state.game_mode == "Célébrités":
+            new_round_celeb()
+        else:
+            new_round_movie()
         st.rerun()
