@@ -5,7 +5,7 @@ import re
 import time
 
 # --- CONFIGURATION ---
-API_KEY = "266f486999f6f5487f4ee8f974607538"  # <--- REMETS TA CLÉ ICI
+API_KEY = "266f486999f6f5487f4ee8f974607538"  # <--- N'OUBLIE PAS DE REMETTRE TA CLÉ ICI !
 BASE_URL = "https://api.themoviedb.org/3"
 IMAGE_URL = "https://image.tmdb.org/t/p/w500"
 GAME_DURATION = 30  # Durée du timer en secondes
@@ -117,7 +117,8 @@ def new_round():
     if not people_list or len(people_list) < 4:
         # On réessaie une fois ou on arrête si ça boucle trop (ici simplifié)
         time.sleep(0.5)
-        st.experimental_rerun() 
+        # CORRECTION ICI : experimental_rerun -> rerun
+        st.rerun() 
         return
 
     correct_person = random.choice(people_list)
@@ -149,84 +150,4 @@ def check_answer(selected_person=None, time_out=False):
     if time_out:
         st.session_state.message = f"⏰ TEMPS ÉCOULÉ ! C'était {st.session_state.current_person['name']}"
     elif selected_person['id'] == st.session_state.current_person['id']:
-        st.session_state.score += 1
-        st.session_state.message = f"✅ BRAVO ! C'est bien {selected_person['name']}"
-    else:
-        st.session_state.message = f"❌ RATÉ... C'était {st.session_state.current_person['name']}"
-    
-    st.session_state.game_phase = "resultat"
-
-# --- INTERFACE ---
-st.title("🌟 Quiz Célébrités")
-
-# Affichage du score en haut
-st.metric(label="Score", value=st.session_state.score)
-
-# Démarrage du premier tour
-if st.session_state.current_person is None and st.session_state.game_phase == "init":
-    if st.button("COMMENCER LE JEU", type="primary"):
-        new_round()
-        st.rerun()
-
-# PHASE 1 : QUESTION
-elif st.session_state.game_phase == "question":
-    
-    # 1. Gestion du Timer
-    elapsed_time = time.time() - st.session_state.start_time
-    remaining_time = GAME_DURATION - elapsed_time
-    
-    # Affichage de la jauge circulaire
-    display_circular_timer(max(0, remaining_time), GAME_DURATION)
-
-    # Vérification temps écoulé
-    if remaining_time <= 0:
-        check_answer(time_out=True)
-        st.rerun()
-
-    # 2. Affichage de la photo (Centrée)
-    # On utilise 3 colonnes, celle du milieu est plus large, mais on centre via CSS aussi
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.session_state.current_person:
-            photo_path = st.session_state.current_person['profile_path']
-            st.image(f"{IMAGE_URL}{photo_path}", use_container_width=True)
-
-    # 3. Affichage des choix
-    st.write("### Qui est cette personne ?")
-    
-    c1, c2 = st.columns(2)
-    for i, person in enumerate(st.session_state.choices):
-        # On répartit les boutons sur 2 colonnes
-        col = c1 if i < 2 else c2
-        with col:
-            # On utilise un callback pour vérifier la réponse immédiatement
-            if st.button(person['name'], key=f"btn_{i}", use_container_width=True):
-                check_answer(person)
-                st.rerun()
-
-    # 4. Boucle de rafraichissement pour animer le timer
-    # Attention: cela recharge la page chaque seconde tant qu'on est en phase question
-    if remaining_time > 0:
-        time.sleep(1) 
-        st.rerun()
-
-# PHASE 2 : RÉSULTAT
-elif st.session_state.game_phase == "resultat":
-    
-    # On réaffiche la photo en petit pour rappel
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        photo_path = st.session_state.current_person['profile_path']
-        st.image(f"{IMAGE_URL}{photo_path}", width=150)
-
-    # Message de résultat
-    if "✅" in st.session_state.message:
-        st.success(st.session_state.message)
-    elif "⏰" in st.session_state.message:
-        st.warning(st.session_state.message)
-    else:
-        st.error(st.session_state.message)
-    
-    if st.button("Question Suivante ➡️", type="primary"):
-        new_round()
-        st.rerun()
+        
