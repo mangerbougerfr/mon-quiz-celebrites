@@ -23,7 +23,6 @@ st.markdown("""
         width: 100%;
         margin-top: 5px;
     }
-    /* Bouton spécial pour l'indice (plus petit) */
     .indice-btn button {
         height: 30px !important;
         min_height: 30px !important;
@@ -32,7 +31,6 @@ st.markdown("""
         color: white;
         border: 1px solid #555;
     }
-    
     div[data-testid="stImage"] {
         display: flex;
         justify-content: center;
@@ -41,6 +39,7 @@ st.markdown("""
         display: block;
         margin-left: auto;
         margin-right: auto;
+        object-fit: cover; /* Assure que les images ne soient pas déformées */
     }
     .found-name {
         color: #00FF00;
@@ -48,6 +47,7 @@ st.markdown("""
         text-align: center;
         font-size: 13px;
         margin-top: -5px;
+        margin-bottom: 10px;
     }
     .missed-name {
         color: #FF4444;
@@ -55,6 +55,7 @@ st.markdown("""
         text-align: center;
         font-size: 13px;
         margin-top: -5px;
+        margin-bottom: 10px;
     }
     .hidden-img img {
         filter: brightness(0) !important;
@@ -98,8 +99,9 @@ def display_circular_timer(remaining_time, total_time):
     st.markdown(svg_code, unsafe_allow_html=True)
 
 # --- FONCTIONS API ---
+# On garde le cache pour la requête pure API pour éviter de spammer TMDB
 @st.cache_data(ttl=3600)
-def fetch_popular_people(page_num):
+def fetch_people_from_page_api(page_num):
     try:
         url = f"{BASE_URL}/person/popular?api_key={API_KEY}&language=fr-FR&page={page_num}"
         return requests.get(url).json().get("results", [])
@@ -125,22 +127,42 @@ def get_random_scene_image(movie_id, default_path):
 
 def get_16_top_stars():
     stars = []
-    for page in range(1, 4):
-        raw = fetch_popular_people(page)
+    # MODIFICATION MAJEURE : On choisit 5 pages au hasard parmi les 40 premières.
+    # Cela garantit la diversité à chaque partie.
+    random_pages = random.sample(range(1, 40), 5)
+    
+    for page in random_pages:
+        raw = fetch_people_from_page_api(page)
         for p in raw:
+            # FILTRES RENFORCÉS :
+            # - Popularity > 20 (Pour éliminer les inconnus)
+            # - Acting only (Pas de réalisateurs inconnus visuellement)
             if (p['profile_path'] and is_latin(p['name']) and 
-                p.get('popularity', 0) > 15 and 
+                p.get('popularity', 0) > 20 and 
+                p.get('known_for_department') == "Acting" and
                 not p.get('adult', False)):
+                
+                # Vérifie unicité
                 if p not in stars:
                     stars.append(p)
+                
                 if len(stars) == 16:
                     return stars
+    
+    # Si on n'en a pas assez, on complète (sécurité)
+    if len(stars) < 16:
+        extra = fetch_people_from_page_api(1)
+        for p in extra:
+            if p not in stars and p['profile_path']:
+                stars.append(p)
+                if len(stars) == 16: break
+                
     return stars
 
 # --- LOGIQUE QUIZ ---
 def new_round_celeb():
-    page = random.randint(1, 10)
-    raw = fetch_popular_people(page)
+    page = random.randint(1, 20)
+    raw = fetch_people_from_page_api(page)
     valid = [p for p in raw if p['profile_path'] and is_latin(p['name']) and p.get('popularity', 0) > 5]
     if len(valid) < 4: new_round_celeb(); return
     correct = random.choice(valid)
@@ -199,16 +221,12 @@ def new_round_memory():
     st.session_state.game_phase = "memorize"
     st.session_state.start_time = time.time()
     
-    # CORRECTION DU BUG ICI :
-    # Au lieu de faire input_memory = "", on supprime la clé pour éviter le conflit
+    # Nettoyage sécurisé de l'input
     if 'input_memory' in st.session_state:
         del st.session_state.input_memory
 
 def check_memory_input():
-    # On vérifie d'abord si la clé existe pour éviter une erreur
-    if 'input_memory' not in st.session_state:
-        return
-
+    if 'input_memory' not in st.session_state: return
     user_text = st.session_state.input_memory.strip().lower()
     found_new = False
     for p in st.session_state.memory_people:
@@ -219,7 +237,6 @@ def check_memory_input():
                 st.session_state.score += 1
                 found_new = True
     if found_new: st.toast(f"✅ Trouvé : {user_text}", icon="🎉")
-    # Pour reset l'input pendant le jeu, on peut utiliser l'assignation ici car on est dans le callback
     st.session_state.input_memory = ""
 
 def reveal_face(person_id):
@@ -313,6 +330,7 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
 
         st.write("---")
         
+        # AFFICHAGE DE LA GRILLE (CODE NETTOYÉ POUR ÉVITER LES DOUBLONS)
         people = st.session_state.memory_people
         
         for i in range(0, 16, 4):
@@ -322,21 +340,23 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                     p = people[i+j]
                     with cols[j]:
                         
-                        # CAS 1: TROUVÉ
+                        # --- ETAT 1: TROUVÉ PAR LE JOUEUR ---
                         if p['id'] in st.session_state.memory_found:
                             st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                             st.markdown(f"<div class='found-name'>{p['name']}</div>", unsafe_allow_html=True)
                         
-                        # CAS 2: SOLUTION DEMANDÉE
+                        # --- ETAT 2: SOLUTION RÉVÉLÉE ---
                         elif st.session_state.show_solution:
                             st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                             st.markdown(f"<div class='missed-name'>{p['name']}</div>", unsafe_allow_html=True)
 
-                        # CAS 3: INDICE
+                        # --- ETAT 3: INDICE VISAGE SEUL ---
                         elif p['id'] in st.session_state.memory_revealed_faces:
                             st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
+                            # Espace vide pour alignement
+                            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
                         
-                        # CAS 4: CACHÉ
+                        # --- ETAT 4: CACHÉ (NOIR) ---
                         else:
                             st.markdown(
                                 f"""<div class="hidden-img" style="display:flex; justify-content:center;">
@@ -344,7 +364,7 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                                 </div>""", 
                                 unsafe_allow_html=True
                             )
-                            # Bouton pour révéler (Indice)
+                            # Bouton Indice
                             st.markdown('<div class="indice-btn">', unsafe_allow_html=True)
                             if st.button("👁️", key=f"rev_{p['id']}"):
                                 reveal_face(p['id'])
