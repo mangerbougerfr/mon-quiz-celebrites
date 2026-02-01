@@ -5,14 +5,14 @@ import re
 import time
 
 # --- CONFIGURATION ---
-API_KEY = "266f486999f6f5487f4ee8f974607538"  # <--- REMETS TA CLÉ ICI
+API_KEY = "266f486999f6f5487f4ee8f974607538"  # <--- REMETS TA CLÉ ICI !!!
 BASE_URL = "https://api.themoviedb.org/3"
 IMAGE_URL = "https://image.tmdb.org/t/p/w500"
-GAME_DURATION = 30  # Durée du timer en secondes
+GAME_DURATION = 30 
 
 st.set_page_config(page_title="Quiz Célébrités", page_icon="🎬", layout="centered")
 
-# --- CSS PERSONNALISÉ ---
+# --- CSS ---
 st.markdown("""
 <style>
     .stButton button {
@@ -24,58 +24,52 @@ st.markdown("""
         margin-left: auto;
         margin-right: auto;
     }
-    .timer-container {
-        text-align: center;
-        font-size: 24px;
-        font-weight: bold;
-        margin-bottom: 20px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- FONCTIONS ---
 def is_latin(text):
-    # Vérifie si le nom est écrit avec notre alphabet
     return bool(re.match(r'^[a-zA-Zà-üÀ-Ü\s\-\.\']+$', text))
 
-def get_random_page():
-    # On ne cherche que dans les 5 premières pages pour avoir des stars TRES connues
-    return random.randint(1, 5)
-
-def get_people_from_api():
+# On utilise le cache pour éviter de rappeler l'API quand le timer tourne
+@st.cache_data(ttl=3600)
+def fetch_people_from_page(page_num):
     try:
-        page = get_random_page()
-        url = f"{BASE_URL}/person/popular?api_key={API_KEY}&language=fr-FR&page={page}"
+        url = f"{BASE_URL}/person/popular?api_key={API_KEY}&language=fr-FR&page={page_num}"
         response = requests.get(url)
         data = response.json()
-        
-        valid_people = []
         if "results" in data:
-            for p in data["results"]:
-                # Filtres : Photo existe, Nom latin, Populaire, Pas de contenu adulte
-                if (p['profile_path'] and 
-                    is_latin(p['name']) and 
-                    p.get('popularity', 0) > 10 and 
-                    not p.get('adult', False)):
-                    valid_people.append(p)
-            return valid_people
+            return data["results"]
         return []
     except:
         return []
 
-def display_circular_timer(remaining_time, total_time):
-    """Affiche une jauge circulaire colorée via HTML/SVG"""
-    percent = (remaining_time / total_time) * 100
-    
-    # Choix de la couleur
-    if remaining_time > 15:
-        color = "#4CAF50" # Vert
-    elif remaining_time > 5:
-        color = "#FFC107" # Jaune/Orange
-    else:
-        color = "#F44336" # Rouge
+def get_valid_people():
+    # On essaie de trouver des gens valides sur 3 pages aléatoires différentes
+    # pour éviter de tourner en rond si une page est vide
+    for _ in range(3):
+        page = random.randint(1, 10) # Top 10 des pages pour avoir des gens connus
+        raw_people = fetch_people_from_page(page)
+        
+        valid_people = []
+        for p in raw_people:
+            # Filtres : Photo + Nom Latin + Popularité décente
+            if (p['profile_path'] and 
+                is_latin(p['name']) and 
+                p.get('popularity', 0) > 5): # J'ai baissé un peu la sévérité
+                valid_people.append(p)
+        
+        if len(valid_people) >= 4:
+            return valid_people
+            
+    return []
 
-    # Code SVG pour le cercle
+def display_circular_timer(remaining_time, total_time):
+    percent = (remaining_time / total_time) * 100
+    if remaining_time > 15: color = "#4CAF50"
+    elif remaining_time > 5: color = "#FFC107"
+    else: color = "#F44336"
+
     svg_code = f"""
     <div style="display: flex; justify-content: center; margin-bottom: 10px;">
         <svg width="100" height="100" viewBox="0 0 100 100">
@@ -89,7 +83,7 @@ def display_circular_timer(remaining_time, total_time):
     """
     st.markdown(svg_code, unsafe_allow_html=True)
 
-# --- INITIALISATION SESSION STATE ---
+# --- ETAT DU JEU ---
 if 'current_person' not in st.session_state:
     st.session_state.current_person = None
 if 'choices' not in st.session_state:
@@ -103,25 +97,20 @@ if 'message' not in st.session_state:
 if 'start_time' not in st.session_state:
     st.session_state.start_time = 0
 
-# --- LOGIQUE DU JEU ---
-
+# --- MOTEUR DU JEU ---
 def new_round():
-    people_list = get_people_from_api()
+    people_list = get_valid_people()
     
     if not people_list or len(people_list) < 4:
-        time.sleep(0.5)
-        st.rerun() 
+        st.error("Erreur de connexion API ou pas assez de résultats. Vérifie ta clé API.")
+        st.stop() # Arrête le script ici pour éviter la boucle infinie
         return
 
     correct_person = random.choice(people_list)
     correct_gender = correct_person['gender']
     
     same_gender_people = [p for p in people_list if p['id'] != correct_person['id'] and p['gender'] == correct_gender]
-    
-    if len(same_gender_people) < 3:
-        others = [p for p in people_list if p['id'] != correct_person['id']]
-    else:
-        others = same_gender_people
+    others = same_gender_people if len(same_gender_people) >= 3 else [p for p in people_list if p['id'] != correct_person['id']]
 
     if len(others) >= 3:
         wrong_answers = random.sample(others, 3)
@@ -134,7 +123,7 @@ def new_round():
         st.session_state.start_time = time.time()
         st.session_state.message = ""
     else:
-        new_round()
+        st.warning("Pas assez de données pour générer une question cohérente. Réessaie.")
 
 def check_answer(selected_person=None, time_out=False):
     if time_out:
@@ -147,34 +136,71 @@ def check_answer(selected_person=None, time_out=False):
     
     st.session_state.game_phase = "resultat"
 
-# --- INTERFACE ---
+# --- AFFICHAGE ---
 st.title("🌟 Quiz Célébrités")
-
 st.metric(label="Score", value=st.session_state.score)
 
-if st.session_state.current_person is None and st.session_state.game_phase == "init":
+# 1. ÉCRAN D'ACCUEIL
+if st.session_state.game_phase == "init":
     if st.button("COMMENCER LE JEU", type="primary"):
         new_round()
         st.rerun()
 
+# 2. QUESTION
 elif st.session_state.game_phase == "question":
     
-    # 1. Gestion du Timer
-    elapsed_time = time.time() - st.session_state.start_time
-    remaining_time = GAME_DURATION - elapsed_time
+    # Calcul du temps
+    elapsed = time.time() - st.session_state.start_time
+    remaining = GAME_DURATION - elapsed
     
-    display_circular_timer(max(0, remaining_time), GAME_DURATION)
-
-    if remaining_time <= 0:
+    # Affiche le timer
+    display_circular_timer(max(0, remaining), GAME_DURATION)
+    
+    # Vérifie si temps écoulé
+    if remaining <= 0:
         check_answer(time_out=True)
         st.rerun()
 
-    # 2. Affichage de la photo
+    # Affiche l'image
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.session_state.current_person:
-            photo_path = st.session_state.current_person['profile_path']
-            st.image(f"{IMAGE_URL}{photo_path}", use_container_width=True)
+            p_path = st.session_state.current_person['profile_path']
+            st.image(f"{IMAGE_URL}{p_path}", use_container_width=True)
 
-    # 3. Affichage des choix
+    st.write("### Qui est cette personne ?")
     
+    # Affiche les boutons
+    if st.session_state.choices:
+        c1, c2 = st.columns(2)
+        for i, person in enumerate(st.session_state.choices):
+            col = c1 if i < 2 else c2
+            with col:
+                # IMPORTANT: On met une clé unique basée sur l'ID de la personne pour éviter les confusions
+                if st.button(person['name'], key=f"btn_{person['id']}", use_container_width=True):
+                    check_answer(person)
+                    st.rerun()
+    
+    # Boucle de rafraichissement (placée à la toute fin)
+    if remaining > 0:
+        time.sleep(1)
+        st.rerun()
+
+# 3. RÉSULTAT
+elif st.session_state.game_phase == "resultat":
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        p_path = st.session_state.current_person['profile_path']
+        st.image(f"{IMAGE_URL}{p_path}", width=150)
+
+    if "✅" in st.session_state.message:
+        st.success(st.session_state.message)
+    elif "⏰" in st.session_state.message:
+        st.warning(st.session_state.message)
+    else:
+        st.error(st.session_state.message)
+    
+    if st.button("Question Suivante ➡️", type="primary"):
+        new_round()
+        st.rerun()
