@@ -17,12 +17,22 @@ st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
 st.markdown("""
 <style>
     .stButton button {
-        height: 60px;
+        height: auto;
+        min_height: 50px;
         font-size: 18px;
         width: 100%;
-        margin-top: 0px;
+        margin-top: 5px;
     }
-    /* Force le centrage des images dans leur colonne */
+    /* Bouton spécial pour l'indice (plus petit) */
+    .indice-btn button {
+        height: 30px !important;
+        min_height: 30px !important;
+        font-size: 14px !important;
+        background-color: #333;
+        color: white;
+        border: 1px solid #555;
+    }
+    
     div[data-testid="stImage"] {
         display: flex;
         justify-content: center;
@@ -39,6 +49,13 @@ st.markdown("""
         font-size: 13px;
         margin-top: -5px;
     }
+    .missed-name {
+        color: #FF4444;
+        font-weight: bold;
+        text-align: center;
+        font-size: 13px;
+        margin-top: -5px;
+    }
     .hidden-img img {
         filter: brightness(0) !important;
         -webkit-filter: brightness(0) !important; 
@@ -47,10 +64,9 @@ st.markdown("""
         margin-left: auto;
         margin-right: auto;
     }
-    /* Réduire les espaces vides */
     .block-container {
         padding-top: 1rem;
-        padding-bottom: 0rem;
+        padding-bottom: 2rem;
     }
     div[data-testid="column"] {
         padding: 0px;
@@ -178,6 +194,8 @@ def new_round_memory():
     random.shuffle(people)
     st.session_state.memory_people = people
     st.session_state.memory_found = []
+    st.session_state.memory_revealed_faces = [] # Pour les indices (visages seuls)
+    st.session_state.show_solution = False # Pour tout révéler
     st.session_state.game_phase = "memorize"
     st.session_state.start_time = time.time()
     st.session_state.input_memory = ""
@@ -195,6 +213,10 @@ def check_memory_input():
     if found_new: st.toast(f"✅ Trouvé : {user_text}", icon="🎉")
     st.session_state.input_memory = ""
 
+def reveal_face(person_id):
+    if person_id not in st.session_state.memory_revealed_faces:
+        st.session_state.memory_revealed_faces.append(person_id)
+
 # --- STATE ---
 if 'score' not in st.session_state: st.session_state.score = 0
 if 'game_phase' not in st.session_state: st.session_state.game_phase = "init"
@@ -206,6 +228,8 @@ if 'message' not in st.session_state: st.session_state.message = ""
 if 'start_time' not in st.session_state: st.session_state.start_time = 0
 if 'memory_people' not in st.session_state: st.session_state.memory_people = []
 if 'memory_found' not in st.session_state: st.session_state.memory_found = []
+if 'memory_revealed_faces' not in st.session_state: st.session_state.memory_revealed_faces = []
+if 'show_solution' not in st.session_state: st.session_state.show_solution = False
 
 # --- INTERFACE ---
 st.sidebar.title("Menu")
@@ -233,7 +257,7 @@ if st.session_state.game_phase == "init":
         st.rerun()
 
 # ---------------------------------------------------------
-# JEU MÉMOIRE (IMAGES RÉDUITES)
+# JEU MÉMOIRE
 # ---------------------------------------------------------
 elif st.session_state.game_mode == "Mémoire (16 Visages)":
     
@@ -251,7 +275,6 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                 if i + j < len(people):
                     p = people[i+j]
                     with cols[j]:
-                        # WIDTH=115 pour réduire la taille dans la grille
                         st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                         st.caption(p['name'])
         
@@ -262,10 +285,25 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
             time.sleep(1)
             st.rerun()
 
-    # PHASE DEVINETTE
+    # PHASE DEVINETTE (RECALL)
     elif st.session_state.game_phase == "recall":
+        
+        # ZONE INPUT
         st.text_input("Qui as-tu vu ?", key="input_memory", on_change=check_memory_input)
+        
+        # BOUTONS DE CONTRÔLE
+        col_ctrl1, col_ctrl2 = st.columns(2)
+        with col_ctrl1:
+            if st.button("👀 Tout Révéler"):
+                st.session_state.show_solution = True
+                st.rerun()
+        with col_ctrl2:
+            if st.button("🔄 Prochaine Manche"):
+                new_round_memory()
+                st.rerun()
+
         st.write("---")
+        
         people = st.session_state.memory_people
         
         for i in range(0, 16, 4):
@@ -274,9 +312,23 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                 if i + j < len(people):
                     p = people[i+j]
                     with cols[j]:
+                        
+                        # CAS 1: TROUVÉ PAR LE JOUEUR
                         if p['id'] in st.session_state.memory_found:
                             st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
                             st.markdown(f"<div class='found-name'>{p['name']}</div>", unsafe_allow_html=True)
+                        
+                        # CAS 2: SOLUTION DEMANDÉE (NON TROUVÉ)
+                        elif st.session_state.show_solution:
+                            st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
+                            st.markdown(f"<div class='missed-name'>{p['name']}</div>", unsafe_allow_html=True)
+
+                        # CAS 3: INDICE DEMANDÉ (VISAGE SEUL)
+                        elif p['id'] in st.session_state.memory_revealed_faces:
+                            st.image(f"{IMAGE_URL}{p['profile_path']}", width=115)
+                            # Pas de nom, c'est juste l'indice visuel
+                        
+                        # CAS 4: CACHÉ (NOIR + BOUTON INDICE)
                         else:
                             st.markdown(
                                 f"""<div class="hidden-img" style="display:flex; justify-content:center;">
@@ -284,6 +336,12 @@ elif st.session_state.game_mode == "Mémoire (16 Visages)":
                                 </div>""", 
                                 unsafe_allow_html=True
                             )
+                            # Bouton pour révéler (Indice)
+                            st.markdown('<div class="indice-btn">', unsafe_allow_html=True)
+                            if st.button("👁️", key=f"rev_{p['id']}"):
+                                reveal_face(p['id'])
+                                st.rerun()
+                            st.markdown('</div>', unsafe_allow_html=True)
         
         if len(st.session_state.memory_found) == 16:
             st.balloons()
@@ -303,17 +361,13 @@ elif st.session_state.game_phase == "question":
         display_circular_timer(max(0, remaining), GAME_DURATION)
         if remaining <= 0: check_answer(None, time_out=True); st.rerun()
 
-        # CENTRAGE : On utilise 3 colonnes et on met l'image au milieu
         c_left, c_center, c_right = st.columns([1, 2, 1])
         with c_center:
-             # Width 300 pour portrait
             st.image(f"https://image.tmdb.org/t/p/w500{st.session_state.current_image}", width=300)
 
     else: # Films
-        # CENTRAGE : Idem
-        c_left, c_center, c_right = st.columns([1, 6, 1]) # Colonne milieu plus large pour film
+        c_left, c_center, c_right = st.columns([1, 6, 1])
         with c_center:
-            # Width 500 pour film
             st.image(f"https://image.tmdb.org/t/p/w780{st.session_state.current_image}", width=500)
 
     st.write("### Qui est-ce ?" if st.session_state.game_mode == "Célébrités" else "### Quel est ce film ?")
@@ -336,7 +390,6 @@ elif st.session_state.game_phase == "question":
 elif st.session_state.game_phase == "resultat":
     item = st.session_state.current_item
     
-    # CENTRAGE RÉSULTAT AUSSI
     c_left, c_center, c_right = st.columns([1, 2, 1])
     with c_center:
         if st.session_state.game_mode == "Célébrités":
