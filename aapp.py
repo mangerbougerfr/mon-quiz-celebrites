@@ -1,9 +1,9 @@
 import streamlit as st
 import requests
-import random
 import re
 import time
 import unicodedata
+import secrets
 
 # =========================
 # CONFIG
@@ -11,7 +11,6 @@ import unicodedata
 API_KEY = "266f486999f6f5487f4ee8f974607538"  # <-- Mets ta clé TMDB ici
 BASE_URL = "https://api.themoviedb.org/3"
 
-# Images
 IMG_PERSON_GRID = "https://image.tmdb.org/t/p/w342"   # mémoire
 IMG_PERSON_QUIZ = "https://image.tmdb.org/t/p/w500"   # célébrités
 IMG_MOVIE = "https://image.tmdb.org/t/p/w780"         # films
@@ -22,7 +21,7 @@ MEMORY_TIME = 60
 st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
 
 # =========================
-# CSS
+# CSS (réponses comme la capture)
 # =========================
 st.markdown("""
 <style>
@@ -33,14 +32,13 @@ div[data-testid="column"] { padding: 0px !important; }
 div[data-testid="stImage"] { display:flex; justify-content:center; }
 div[data-testid="stImage"] > img { margin:auto; object-fit:cover; }
 
-/* ========== BOUTONS REPONSES (propositions) ========== */
-/* On stylise uniquement les boutons type="primary" (utilisés seulement pour les réponses) */
+/* --- Réponses : 4 grands rectangles identiques --- */
 button[kind="primary"]{
-    height: 74px !important;
+    height: 64px !important;
     width: 100% !important;
-    border-radius: 18px !important;
+    border-radius: 16px !important;
     font-size: 18px !important;
-    border: 1px solid rgba(255,255,255,0.22) !important;
+    border: 1px solid rgba(255,255,255,0.20) !important;
     background: rgba(255,255,255,0.06) !important;
     color: #fff !important;
 }
@@ -50,13 +48,13 @@ button[kind="primary"]:hover{
     transform: translateY(-1px);
 }
 
-/* Espace horizontal identique entre les 2 colonnes de réponses */
+/* Espace horizontal entre les 2 colonnes */
 div[data-testid="stHorizontalBlock"]{ gap: 16px !important; }
 
-/* Espace vertical identique entre les 2 rangées */
+/* Espace vertical entre rangées */
 .answers-row-gap{ height: 16px; }
 
-/* ========== MODE MEMOIRE ========== */
+/* --- Mémoire --- */
 .found-name{
     color:#00C853; font-weight:800; text-align:center;
     font-size:13px; margin-top:-6px; margin-bottom:12px;
@@ -133,7 +131,7 @@ def display_circular_timer(remaining_time, total_time):
     st.markdown(svg_code, unsafe_allow_html=True)
 
 # =========================
-# TMDB cache
+# TMDB cache (pages)
 # =========================
 @st.cache_data(ttl=24 * 3600)
 def fetch_people_page(page_num: int):
@@ -155,69 +153,113 @@ def get_random_scene_image(movie_id: int, default_path: str) -> str:
     backdrops = data.get("backdrops", []) or []
     textless = [b for b in backdrops if b.get("iso_639_1") is None]
     if textless:
-        return random.choice(textless).get("file_path", default_path)
+        return secrets.choice(textless).get("file_path", default_path)
     if len(backdrops) > 1:
-        return random.choice(backdrops[1:]).get("file_path", default_path)
+        return secrets.choice(backdrops[1:]).get("file_path", default_path)
     return default_path
 
 # =========================
-# MODE MEMOIRE : pool + hasard réel
+# Session State init
 # =========================
-@st.cache_data(ttl=24 * 3600)
-def build_star_pool(pages: int = 40):
-    pool = []
+def ss_init(key, value):
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+ss_init("mode", "Célébrités")
+ss_init("phase", "init")
+ss_init("score", 0)
+ss_init("start_time", 0.0)
+ss_init("message", "")
+ss_init("current_item", None)
+ss_init("current_image", None)
+ss_init("choices", [])
+
+# mémoire
+ss_init("memory_people", [])
+ss_init("memory_found", [])
+ss_init("memory_revealed_faces", [])
+ss_init("show_solution", False)
+ss_init("memory_round_id", 0)
+ss_init("memory_input_key", "mem_input_0")
+ss_init("memory_history_ids", [])     # anti-répétition (id récents)
+ss_init("memory_reveal_locked", False)
+
+# =========================
+# MODE MEMOIRE (tirage vraiment aléatoire)
+# =========================
+def pick_16_random_stars():
+    """
+    On tire des pages ALÉATOIRES à chaque manche (1..200),
+    puis on choisit 16 personnes au hasard dans ces candidats.
+    Anti-répétition sur les ~6 manches précédentes.
+    """
+    rng_pages = set()
+    while len(rng_pages) < 14:
+        rng_pages.add(secrets.randbelow(200) + 1)
+
+    history = set(st.session_state.get("memory_history_ids", []))
+
+    candidates = []
     seen = set()
 
-    for page in range(1, pages + 1):
-        raw = fetch_people_page(page)
-        for p in raw:
+    # 1) filtre "stars connues"
+    def is_candidate(p, min_pop=18):
+        if not p.get("id"): return False
+        if not p.get("profile_path"): return False
+        if p.get("known_for_department") != "Acting": return False
+        if p.get("adult", False): return False
+        if not is_latin(p.get("name", "")): return False
+        if p.get("popularity", 0) < min_pop: return False
+        return True
+
+    # 2) on récupère des candidats depuis pages aléatoires
+    for page in rng_pages:
+        for p in fetch_people_page(page):
             pid = p.get("id")
             if not pid or pid in seen:
                 continue
-            if not p.get("profile_path"):
+            if not is_candidate(p, min_pop=18):
                 continue
-            if p.get("known_for_department") != "Acting":
-                continue
-            if p.get("adult", False):
-                continue
-            if not is_latin(p.get("name", "")):
-                continue
-            # seuil de popularité pour éviter trop d'inconnus
-            if p.get("popularity", 0) < 18:
-                continue
-
             seen.add(pid)
-            pool.append(p)
+            candidates.append(p)
 
-    pool.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-    return pool[:500]
+    # 3) si pas assez, on relâche un peu (mais garde acting+photo)
+    if len(candidates) < 16:
+        for page in rng_pages:
+            for p in fetch_people_page(page):
+                pid = p.get("id")
+                if not pid or pid in seen:
+                    continue
+                if not is_candidate(p, min_pop=10):
+                    continue
+                seen.add(pid)
+                candidates.append(p)
+                if len(candidates) >= 40:
+                    break
 
-def pick_16_random_stars():
-    pool = build_star_pool(pages=40)
-    if len(pool) < 16:
+    if len(candidates) < 16:
         return []
 
-    rng = random.SystemRandom()
+    # 4) on évite les ids récents si possible
+    filtered = [p for p in candidates if p["id"] not in history]
+    if len(filtered) >= 16:
+        candidates = filtered
 
-    # on évite de reprendre ceux des manches récentes
-    history = st.session_state.get("memory_history_ids", [])
-    history_set = set(history)
+    # 5) tirage 16 sans remplacement (façon secrets)
+    # on mélange en triant par un aléa fort
+    shuffled = sorted(candidates, key=lambda _: secrets.randbits(64))
+    sample = shuffled[:16]
 
-    candidates = [p for p in pool if p["id"] not in history_set]
-    if len(candidates) < 16:
-        candidates = pool[:]  # fallback
-
-    sample = rng.sample(candidates, 16)
-
+    # update history (garde ~96 ids)
     new_ids = [p["id"] for p in sample]
-    history = (history + new_ids)[-96:]  # garde 6 manches d'historique
-    st.session_state.memory_history_ids = history
+    old = st.session_state.get("memory_history_ids", [])
+    st.session_state.memory_history_ids = (old + new_ids)[-96:]
 
     return sample
 
 def start_memory_round():
     """
-    Même rôle que 'Commencer' : reset total + nouvelles 16 célébrités + phase memorize
+    Même rôle que ▶️ Commencer : reset total + nouvelles 16 célébrités + phase memorize
     """
     st.session_state.memory_round_id += 1
     st.session_state.memory_input_key = f"mem_input_{st.session_state.memory_round_id}"
@@ -230,7 +272,7 @@ def start_memory_round():
 
     people = pick_16_random_stars()
     if len(people) < 16:
-        st.error("❌ Impossible de générer 16 célébrités. Vérifie la clé TMDB.")
+        st.error("❌ Impossible de générer 16 célébrités (clé TMDB ou filtre trop strict).")
         return
 
     st.session_state.memory_people = people
@@ -256,7 +298,6 @@ def check_memory_input():
                 continue
             full = normalize_text(p["name"])
             parts = set(full.replace("-", " ").split())
-
             if (guess in parts and len(guess) > 2) or (guess == full and len(guess) > 2):
                 st.session_state.memory_found.append(p["id"])
                 found_any = True
@@ -268,30 +309,32 @@ def check_memory_input():
 
 def memory_reveal_all():
     st.session_state.show_solution = True
-    # verrouille la prochaine manche tant que pas "tout effacer"
     st.session_state.memory_reveal_locked = True
 
 def memory_clear_all():
     """
-    RETIRE TOUT (rien ne reste), et affiche uniquement "Prochaine manche".
+    Tout effacer = plus rien à l'écran, uniquement 🔄 Prochaine manche.
     """
     st.session_state.show_solution = False
     st.session_state.memory_reveal_locked = False
 
-    # supprime TOUT l'affichage / contenu
     st.session_state.memory_people = []
     st.session_state.memory_found = []
     st.session_state.memory_revealed_faces = []
 
-    # on passe dans une phase spéciale "vide"
+    # On supprime aussi la valeur du champ texte de cette manche
+    k = st.session_state.memory_input_key
+    if k in st.session_state:
+        del st.session_state[k]
+
     st.session_state.phase = "memory_empty"
 
 # =========================
-# QUIZ CELEB / FILMS
+# QUIZ Célébrités / Films
 # =========================
 def get_valid_people_for_quiz():
     for _ in range(8):
-        page = random.randint(1, 20)
+        page = secrets.randbelow(20) + 1
         raw = fetch_people_page(page)
         valid = []
         for p in raw:
@@ -314,15 +357,15 @@ def new_round_celeb_quiz():
         st.error("❌ Problème de chargement (clé TMDB ?).")
         st.stop()
 
-    correct = random.choice(people)
+    correct = secrets.choice(people)
     g = correct.get("gender", 0)
 
     same_gender = [p for p in people if p["id"] != correct["id"] and p.get("gender", 0) == g]
     others = same_gender if len(same_gender) >= 3 else [p for p in people if p["id"] != correct["id"]]
 
-    wrong = random.sample(others, 3)
+    wrong = sorted(others, key=lambda _: secrets.randbits(64))[:3]
     choices = wrong + [correct]
-    random.shuffle(choices)
+    choices = sorted(choices, key=lambda _: secrets.randbits(64))
 
     st.session_state.current_item = correct
     st.session_state.current_image = correct["profile_path"]
@@ -333,7 +376,7 @@ def new_round_celeb_quiz():
 
 def get_valid_movies_for_quiz():
     for _ in range(8):
-        page = random.randint(1, 20)
+        page = secrets.randbelow(20) + 1
         raw = fetch_movies_page(page)
         valid = []
         for m in raw:
@@ -352,11 +395,11 @@ def new_round_movie_quiz():
         st.error("❌ Problème de chargement (clé TMDB ?).")
         st.stop()
 
-    correct = random.choice(movies)
+    correct = secrets.choice(movies)
     others = [m for m in movies if m["id"] != correct["id"]]
-    wrong = random.sample(others, 3)
+    wrong = sorted(others, key=lambda _: secrets.randbits(64))[:3]
     choices = wrong + [correct]
-    random.shuffle(choices)
+    choices = sorted(choices, key=lambda _: secrets.randbits(64))
 
     scene = get_random_scene_image(correct["id"], correct["backdrop_path"])
 
@@ -379,32 +422,6 @@ def check_answer_quiz(selected_id: int, name_key: str):
     st.session_state.phase = "result"
 
 # =========================
-# Session State init
-# =========================
-def ss_init(key, value):
-    if key not in st.session_state:
-        st.session_state[key] = value
-
-ss_init("mode", "Célébrités")
-ss_init("phase", "init")
-ss_init("score", 0)
-ss_init("start_time", 0.0)
-ss_init("message", "")
-ss_init("current_item", None)
-ss_init("current_image", None)
-ss_init("choices", [])
-
-# mémoire
-ss_init("memory_people", [])
-ss_init("memory_found", [])
-ss_init("memory_revealed_faces", [])
-ss_init("show_solution", False)
-ss_init("memory_round_id", 0)
-ss_init("memory_input_key", "mem_input_0")
-ss_init("memory_history_ids", [])
-ss_init("memory_reveal_locked", False)
-
-# =========================
 # UI - Menu
 # =========================
 st.sidebar.title("🎮 Menu")
@@ -425,7 +442,7 @@ st.title(f"⭐ {st.session_state.mode}")
 if st.session_state.mode == "Mémoire (16 visages)" and st.session_state.phase in ("memorize", "recall"):
     st.metric("🧠 Trouvés", f"{len(st.session_state.memory_found)} / 16")
 elif st.session_state.mode == "Mémoire (16 visages)" and st.session_state.phase == "memory_empty":
-    st.metric("🧠 Manche", "Prête")
+    st.metric("🧹 État", "Tout effacé")
 else:
     st.metric("🏆 Score", st.session_state.score)
 
@@ -447,13 +464,16 @@ if st.session_state.phase == "init":
 # =========================================================
 elif st.session_state.mode == "Mémoire (16 visages)":
 
-    # Phase spéciale : tout est vide, seul "Prochaine manche" doit rester
+    # Tout effacé = uniquement "Prochaine manche"
     if st.session_state.phase == "memory_empty":
-        st.write("🧹 **Tout est effacé.**")
-        st.button("🔄 Prochaine manche", type="secondary", on_click=start_memory_round)
+        st.write("🧹 **Tout a été effacé.**")
+        if st.button("🔄 Prochaine manche", type="secondary"):
+            start_memory_round()
+            st.rerun()
+        st.stop()
 
-    # Mémorisation (aucun nom)
-    elif st.session_state.phase == "memorize":
+    # Mémorisation
+    if st.session_state.phase == "memorize":
         elapsed = time.time() - st.session_state.start_time
         remaining = MEMORY_TIME - elapsed
 
@@ -477,7 +497,7 @@ elif st.session_state.mode == "Mémoire (16 visages)":
             st.rerun()
 
     # Recall
-    elif st.session_state.phase == "recall":
+    if st.session_state.phase == "recall":
         st.text_input(
             "✍️ Écris un prénom / nom (séparés par virgules si tu veux)",
             key=st.session_state.memory_input_key,
@@ -485,20 +505,27 @@ elif st.session_state.mode == "Mémoire (16 visages)":
         )
 
         c1, c2, c3 = st.columns(3)
+
         with c1:
-            st.button("👀 Tout révéler", on_click=memory_reveal_all)
+            if st.button("👀 Tout révéler", type="secondary"):
+                memory_reveal_all()
+                st.rerun()
+                st.stop()
+
         with c2:
-            st.button("🧹 Tout effacer", on_click=memory_clear_all)
+            if st.button("🧹 Tout effacer", type="secondary"):
+                memory_clear_all()
+                st.rerun()
+                st.stop()
+
         with c3:
-            st.button(
-                "🔄 Prochaine manche",
-                disabled=st.session_state.memory_reveal_locked,
-                type="secondary",
-                on_click=start_memory_round
-            )
+            if st.button("🔄 Prochaine manche", type="secondary", disabled=st.session_state.memory_reveal_locked):
+                start_memory_round()
+                st.rerun()
+                st.stop()
 
         if st.session_state.memory_reveal_locked:
-            st.warning("⚠️ Tu as cliqué sur **👀 Tout révéler**. Clique sur **🧹 Tout effacer** avant de lancer **🔄 Prochaine manche**.")
+            st.warning("⚠️ Tu as cliqué sur **👀 Tout révéler**. Clique sur **🧹 Tout effacer** avant **🔄 Prochaine manche**.")
 
         st.write("---")
 
@@ -537,6 +564,7 @@ elif st.session_state.mode == "Mémoire (16 visages)":
                             if st.button("👁️ Indice", key=f"hint_{rid}_{pid}"):
                                 reveal_face(pid)
                                 st.rerun()
+                                st.stop()
                             st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
@@ -544,7 +572,7 @@ elif st.session_state.mode == "Mémoire (16 visages)":
 # =========================================================
 elif st.session_state.phase == "question":
 
-    # -------- Célébrités --------
+    # ----- Célébrités -----
     if st.session_state.mode == "Célébrités":
         elapsed = time.time() - st.session_state.start_time
         remaining = GAME_DURATION - elapsed
@@ -555,15 +583,15 @@ elif st.session_state.phase == "question":
             st.session_state.phase = "result"
             st.rerun()
 
-        # Image plus grande
+        # image plus grande
         left, center, right = st.columns([1, 2, 1])
         with center:
-            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_image}", width=430)
+            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_image}", width=460)
 
         st.write("### 👤 Qui est-ce ?")
 
-        # Réponses centrées comme ta capture : 2 colonnes, 2 lignes
-        L, M, R = st.columns([1, 4, 1])
+        # réponses centrées comme ta capture
+        L, M, R = st.columns([1, 5, 1])
         with M:
             row1 = st.columns(2)
             with row1[0]:
@@ -594,15 +622,15 @@ elif st.session_state.phase == "question":
         time.sleep(1)
         st.rerun()
 
-    # -------- Films --------
+    # ----- Films -----
     else:
         left, center, right = st.columns([1, 6, 1])
         with center:
-            st.image(f"{IMG_MOVIE}{st.session_state.current_image}", width=760)
+            st.image(f"{IMG_MOVIE}{st.session_state.current_image}", width=820)
 
         st.write("### 🎬 Quel est ce film ?")
 
-        L, M, R = st.columns([1, 5, 1])
+        L, M, R = st.columns([1, 6, 1])
         with M:
             row1 = st.columns(2)
             with row1[0]:
@@ -637,9 +665,9 @@ elif st.session_state.phase == "result":
     left, center, right = st.columns([1, 2, 1])
     with center:
         if st.session_state.mode == "Célébrités":
-            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_item['profile_path']}", width=260)
+            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_item['profile_path']}", width=280)
         else:
-            st.image(f"{IMG_MOVIE}{st.session_state.current_item['backdrop_path']}", width=600)
+            st.image(f"{IMG_MOVIE}{st.session_state.current_item['backdrop_path']}", width=640)
 
     st.markdown(st.session_state.message)
 
