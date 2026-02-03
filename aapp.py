@@ -13,57 +13,50 @@ BASE_URL = "https://api.themoviedb.org/3"
 
 # Images
 IMG_PERSON_GRID = "https://image.tmdb.org/t/p/w342"   # mémoire
-IMG_PERSON_QUIZ = "https://image.tmdb.org/t/p/w500"   # célébrités quiz
-IMG_MOVIE = "https://image.tmdb.org/t/p/w780"         # films quiz
+IMG_PERSON_QUIZ = "https://image.tmdb.org/t/p/w500"   # célébrités
+IMG_MOVIE = "https://image.tmdb.org/t/p/w780"         # films
 
-GAME_DURATION = 30      # timer célébrités
-MEMORY_TIME = 60        # mémorisation mémoire
+GAME_DURATION = 30
+MEMORY_TIME = 60
 
 st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
 
 # =========================
 # CSS
-# - Réponses en 4 cartes égales (arrondies, espacées, centrées)
 # =========================
 st.markdown("""
 <style>
-/* Layout */
 .block-container { padding-top: 1rem; padding-bottom: 1rem; }
 div[data-testid="column"] { padding: 0px !important; }
 
-/* Centrer images dans colonnes */
+/* Centrer images */
 div[data-testid="stImage"] { display:flex; justify-content:center; }
 div[data-testid="stImage"] > img { margin:auto; object-fit:cover; }
 
-/* ====== Cartes de réponses (seulement en type="primary") ======
-   IMPORTANT: utilise type="primary" uniquement pour les 4 réponses,
-   pas pour les autres boutons.
-*/
+/* ========== BOUTONS REPONSES (propositions) ========== */
+/* On stylise uniquement les boutons type="primary" (utilisés seulement pour les réponses) */
 button[kind="primary"]{
-    height: 78px !important;
+    height: 74px !important;
     width: 100% !important;
-    border-radius: 16px !important;
+    border-radius: 18px !important;
     font-size: 18px !important;
-    border: 1px solid rgba(255,255,255,0.18) !important;
+    border: 1px solid rgba(255,255,255,0.22) !important;
     background: rgba(255,255,255,0.06) !important;
     color: #fff !important;
-    transition: 0.15s ease-in-out;
 }
 button[kind="primary"]:hover{
-    transform: translateY(-1px);
-    border-color: rgba(255,255,255,0.30) !important;
     background: rgba(255,255,255,0.10) !important;
+    border-color: rgba(255,255,255,0.35) !important;
+    transform: translateY(-1px);
 }
 
-/* Gap plus propre entre colonnes */
-div[data-testid="stHorizontalBlock"]{
-    gap: 14px !important;
-}
+/* Espace horizontal identique entre les 2 colonnes de réponses */
+div[data-testid="stHorizontalBlock"]{ gap: 16px !important; }
 
-/* Sépare légèrement les 2 rangées (même distance) */
-.answers-row { margin-top: 14px; }
+/* Espace vertical identique entre les 2 rangées */
+.answers-row-gap{ height: 16px; }
 
-/* ===== Mémoire ===== */
+/* ========== MODE MEMOIRE ========== */
 .found-name{
     color:#00C853; font-weight:800; text-align:center;
     font-size:13px; margin-top:-6px; margin-bottom:12px;
@@ -76,10 +69,10 @@ div[data-testid="stHorizontalBlock"]{
     filter: brightness(0) !important;
     -webkit-filter: brightness(0) !important;
     pointer-events:none;
-    border-radius: 12px;
+    border-radius: 14px;
 }
 
-/* Petit bouton indice en mémoire */
+/* Petit bouton indice */
 .small-btn button{
     height: 34px !important;
     font-size: 14px !important;
@@ -118,13 +111,13 @@ def display_circular_timer(remaining_time, total_time):
     percent = (remaining_time / total_time) * 100 if total_time else 0
 
     if remaining_time > 15:
-        color = "#2ecc71"  # vert
+        color = "#2ecc71"
     elif remaining_time > 10:
-        color = "#f1c40f"  # jaune
+        color = "#f1c40f"
     elif remaining_time > 5:
-        color = "#e67e22"  # orange
+        color = "#e67e22"
     else:
-        color = "#e74c3c"  # rouge
+        color = "#e74c3c"
 
     svg_code = f"""
     <div class="timer-wrap">
@@ -168,15 +161,10 @@ def get_random_scene_image(movie_id: int, default_path: str) -> str:
     return default_path
 
 # =========================
-# MODE MEMOIRE: pool + tirage aléatoire réel
-# + anti-répétition (historique)
+# MODE MEMOIRE : pool + hasard réel
 # =========================
 @st.cache_data(ttl=24 * 3600)
 def build_star_pool(pages: int = 40):
-    """
-    Pool de célébrités très connues (Acting + photo + latin).
-    On garde une pool large pour permettre un vrai hasard.
-    """
     pool = []
     seen = set()
 
@@ -194,14 +182,14 @@ def build_star_pool(pages: int = 40):
                 continue
             if not is_latin(p.get("name", "")):
                 continue
-            if p.get("popularity", 0) < 15:
+            # seuil de popularité pour éviter trop d'inconnus
+            if p.get("popularity", 0) < 18:
                 continue
 
             seen.add(pid)
             pool.append(p)
 
     pool.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-    # pool large pour varier
     return pool[:500]
 
 def pick_16_random_stars():
@@ -211,6 +199,7 @@ def pick_16_random_stars():
 
     rng = random.SystemRandom()
 
+    # on évite de reprendre ceux des manches récentes
     history = st.session_state.get("memory_history_ids", [])
     history_set = set(history)
 
@@ -220,26 +209,24 @@ def pick_16_random_stars():
 
     sample = rng.sample(candidates, 16)
 
-    # update history (garde 96 ids max)
     new_ids = [p["id"] for p in sample]
-    history = (history + new_ids)[-96:]
+    history = (history + new_ids)[-96:]  # garde 6 manches d'historique
     st.session_state.memory_history_ids = history
 
     return sample
 
 def start_memory_round():
     """
-    Nouvelle manche mémoire, reset total.
+    Même rôle que 'Commencer' : reset total + nouvelles 16 célébrités + phase memorize
     """
     st.session_state.memory_round_id += 1
     st.session_state.memory_input_key = f"mem_input_{st.session_state.memory_round_id}"
 
-    # reset
     st.session_state.memory_people = []
     st.session_state.memory_found = []
     st.session_state.memory_revealed_faces = []
     st.session_state.show_solution = False
-    st.session_state.memory_need_clear = False
+    st.session_state.memory_reveal_locked = False
 
     people = pick_16_random_stars()
     if len(people) < 16:
@@ -281,18 +268,26 @@ def check_memory_input():
 
 def memory_reveal_all():
     st.session_state.show_solution = True
-    st.session_state.memory_need_clear = True
+    # verrouille la prochaine manche tant que pas "tout effacer"
+    st.session_state.memory_reveal_locked = True
 
 def memory_clear_all():
     """
-    'Tout effacer' = retirer l'affichage des noms/solutions,
-    et autoriser 'Prochaine manche'.
+    RETIRE TOUT (rien ne reste), et affiche uniquement "Prochaine manche".
     """
     st.session_state.show_solution = False
-    st.session_state.memory_need_clear = False
+    st.session_state.memory_reveal_locked = False
+
+    # supprime TOUT l'affichage / contenu
+    st.session_state.memory_people = []
+    st.session_state.memory_found = []
+    st.session_state.memory_revealed_faces = []
+
+    # on passe dans une phase spéciale "vide"
+    st.session_state.phase = "memory_empty"
 
 # =========================
-# QUIZ Célébrités / Films
+# QUIZ CELEB / FILMS
 # =========================
 def get_valid_people_for_quiz():
     for _ in range(8):
@@ -383,9 +378,8 @@ def check_answer_quiz(selected_id: int, name_key: str):
 
     st.session_state.phase = "result"
 
-
 # =========================
-# Session state init
+# Session State init
 # =========================
 def ss_init(key, value):
     if key not in st.session_state:
@@ -408,7 +402,7 @@ ss_init("show_solution", False)
 ss_init("memory_round_id", 0)
 ss_init("memory_input_key", "mem_input_0")
 ss_init("memory_history_ids", [])
-ss_init("memory_need_clear", False)
+ss_init("memory_reveal_locked", False)
 
 # =========================
 # UI - Menu
@@ -428,9 +422,10 @@ if selected != st.session_state.mode:
 
 st.title(f"⭐ {st.session_state.mode}")
 
-# Compteurs
 if st.session_state.mode == "Mémoire (16 visages)" and st.session_state.phase in ("memorize", "recall"):
     st.metric("🧠 Trouvés", f"{len(st.session_state.memory_found)} / 16")
+elif st.session_state.mode == "Mémoire (16 visages)" and st.session_state.phase == "memory_empty":
+    st.metric("🧠 Manche", "Prête")
 else:
     st.metric("🏆 Score", st.session_state.score)
 
@@ -447,14 +442,18 @@ if st.session_state.phase == "init":
             start_memory_round()
         st.rerun()
 
-
 # =========================================================
 # MODE MEMOIRE
 # =========================================================
 elif st.session_state.mode == "Mémoire (16 visages)":
 
-    # Phase memorize (AUCUN nom ici)
-    if st.session_state.phase == "memorize":
+    # Phase spéciale : tout est vide, seul "Prochaine manche" doit rester
+    if st.session_state.phase == "memory_empty":
+        st.write("🧹 **Tout est effacé.**")
+        st.button("🔄 Prochaine manche", type="secondary", on_click=start_memory_round)
+
+    # Mémorisation (aucun nom)
+    elif st.session_state.phase == "memorize":
         elapsed = time.time() - st.session_state.start_time
         remaining = MEMORY_TIME - elapsed
 
@@ -477,7 +476,7 @@ elif st.session_state.mode == "Mémoire (16 visages)":
             time.sleep(1)
             st.rerun()
 
-    # Phase recall
+    # Recall
     elif st.session_state.phase == "recall":
         st.text_input(
             "✍️ Écris un prénom / nom (séparés par virgules si tu veux)",
@@ -491,15 +490,15 @@ elif st.session_state.mode == "Mémoire (16 visages)":
         with c2:
             st.button("🧹 Tout effacer", on_click=memory_clear_all)
         with c3:
-            # Désactivé si l'utilisateur a révélé tout mais n'a pas effacé
             st.button(
                 "🔄 Prochaine manche",
-                disabled=st.session_state.memory_need_clear,
+                disabled=st.session_state.memory_reveal_locked,
+                type="secondary",
                 on_click=start_memory_round
             )
 
-        if st.session_state.memory_need_clear:
-            st.warning("⚠️ Tu as révélé toutes les réponses. Clique sur **🧹 Tout effacer** avant de lancer la prochaine manche.")
+        if st.session_state.memory_reveal_locked:
+            st.warning("⚠️ Tu as cliqué sur **👀 Tout révéler**. Clique sur **🧹 Tout effacer** avant de lancer **🔄 Prochaine manche**.")
 
         st.write("---")
 
@@ -540,7 +539,6 @@ elif st.session_state.mode == "Mémoire (16 visages)":
                                 st.rerun()
                             st.markdown("</div>", unsafe_allow_html=True)
 
-
 # =========================================================
 # QUIZ (Célébrités / Films)
 # =========================================================
@@ -557,16 +555,16 @@ elif st.session_state.phase == "question":
             st.session_state.phase = "result"
             st.rerun()
 
-        # Image un peu plus grande + centrée
+        # Image plus grande
         left, center, right = st.columns([1, 2, 1])
         with center:
-            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_image}", width=380)
+            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_image}", width=430)
 
         st.write("### 👤 Qui est-ce ?")
 
-        # Réponses centrées sous l'image (col milieu)
-        leftA, midA, rightA = st.columns([1, 3, 1])
-        with midA:
+        # Réponses centrées comme ta capture : 2 colonnes, 2 lignes
+        L, M, R = st.columns([1, 4, 1])
+        with M:
             row1 = st.columns(2)
             with row1[0]:
                 p = st.session_state.choices[0]
@@ -579,7 +577,7 @@ elif st.session_state.phase == "question":
                     check_answer_quiz(p["id"], "name")
                     st.rerun()
 
-            st.markdown("<div class='answers-row'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='answers-row-gap'></div>", unsafe_allow_html=True)
 
             row2 = st.columns(2)
             with row2[0]:
@@ -598,15 +596,14 @@ elif st.session_state.phase == "question":
 
     # -------- Films --------
     else:
-        # Image un peu plus grande + centrée
         left, center, right = st.columns([1, 6, 1])
         with center:
-            st.image(f"{IMG_MOVIE}{st.session_state.current_image}", width=650)
+            st.image(f"{IMG_MOVIE}{st.session_state.current_image}", width=760)
 
         st.write("### 🎬 Quel est ce film ?")
 
-        leftA, midA, rightA = st.columns([1, 4, 1])
-        with midA:
+        L, M, R = st.columns([1, 5, 1])
+        with M:
             row1 = st.columns(2)
             with row1[0]:
                 m = st.session_state.choices[0]
@@ -619,7 +616,7 @@ elif st.session_state.phase == "question":
                     check_answer_quiz(m["id"], "title")
                     st.rerun()
 
-            st.markdown("<div class='answers-row'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='answers-row-gap'></div>", unsafe_allow_html=True)
 
             row2 = st.columns(2)
             with row2[0]:
@@ -633,7 +630,6 @@ elif st.session_state.phase == "question":
                     check_answer_quiz(m["id"], "title")
                     st.rerun()
 
-
 # =========================
 # RESULT (Célébrités / Films)
 # =========================
@@ -641,9 +637,9 @@ elif st.session_state.phase == "result":
     left, center, right = st.columns([1, 2, 1])
     with center:
         if st.session_state.mode == "Célébrités":
-            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_item['profile_path']}", width=240)
+            st.image(f"{IMG_PERSON_QUIZ}{st.session_state.current_item['profile_path']}", width=260)
         else:
-            st.image(f"{IMG_MOVIE}{st.session_state.current_item['backdrop_path']}", width=520)
+            st.image(f"{IMG_MOVIE}{st.session_state.current_item['backdrop_path']}", width=600)
 
     st.markdown(st.session_state.message)
 
