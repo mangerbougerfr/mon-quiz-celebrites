@@ -21,7 +21,7 @@ MEMORY_TIME = 60
 st.set_page_config(page_title="Super Quiz", page_icon="🎮", layout="centered")
 
 # =========================
-# CSS (propositions style "4 rectangles identiques")
+# CSS (propositions style capture)
 # =========================
 st.markdown("""
 <style>
@@ -31,6 +31,7 @@ div[data-testid="column"] { padding: 0px !important; }
 div[data-testid="stImage"] { display:flex; justify-content:center; }
 div[data-testid="stImage"] > img { margin:auto; object-fit:cover; }
 
+/* --- Réponses : 4 rectangles identiques --- */
 button[kind="primary"]{
     height: 64px !important;
     width: 100% !important;
@@ -49,6 +50,7 @@ button[kind="primary"]:hover{
 div[data-testid="stHorizontalBlock"]{ gap: 16px !important; }
 .answers-row-gap{ height: 16px; }
 
+/* --- Mémoire --- */
 .found-name{
     color:#00C853; font-weight:800; text-align:center;
     font-size:13px; margin-top:-6px; margin-bottom:12px;
@@ -173,41 +175,69 @@ ss_init("show_solution", False)
 ss_init("memory_round_id", 0)
 ss_init("memory_input_key", "mem_input_0")
 ss_init("memory_reveal_locked", False)
-
-# NO-REPEAT: toutes les célébrités déjà sorties en mémoire (liste d'IDs)
-ss_init("memory_used_ids", [])  # liste (persist session)
-ss_init("memory_used_season", 1)
+ss_init("memory_used_ids", [])      # NO-REPEAT: jamais réutiliser en mémoire
+ss_init("memory_error", "")         # message d'erreur mémoire
 
 # =========================
-# MODE MEMOIRE - tirage sans répétition
+# Helper UI: réponses 2x2
+# =========================
+def render_answers_2x2(choices, label_key, key_prefix, on_pick):
+    """
+    Affiche 4 boutons identiques (2 colonnes x 2 lignes) centrés.
+    choices: liste de 4 dicts (TMDB)
+    label_key: "name" ou "title"
+    key_prefix: str pour clés uniques
+    on_pick: fonction(selected_id)
+    """
+    # centrer le bloc
+    L, M, R = st.columns([1, 6, 1])
+    with M:
+        row1 = st.columns(2)
+        with row1[0]:
+            if st.button(choices[0][label_key], type="primary", key=f"{key_prefix}_0"):
+                on_pick(choices[0]["id"])
+                st.rerun()
+        with row1[1]:
+            if st.button(choices[1][label_key], type="primary", key=f"{key_prefix}_1"):
+                on_pick(choices[1]["id"])
+                st.rerun()
+
+        st.markdown("<div class='answers-row-gap'></div>", unsafe_allow_html=True)
+
+        row2 = st.columns(2)
+        with row2[0]:
+            if st.button(choices[2][label_key], type="primary", key=f"{key_prefix}_2"):
+                on_pick(choices[2]["id"])
+                st.rerun()
+        with row2[1]:
+            if st.button(choices[3][label_key], type="primary", key=f"{key_prefix}_3"):
+                on_pick(choices[3]["id"])
+                st.rerun()
+
+# =========================
+# MODE MEMOIRE
 # =========================
 def _is_candidate_person(p: dict, min_pop: float) -> bool:
-    if not p.get("id"):
-        return False
-    if not p.get("profile_path"):
-        return False
-    if p.get("known_for_department") != "Acting":
-        return False
-    if p.get("adult", False):
-        return False
-    if not is_latin(p.get("name", "")):
-        return False
-    if p.get("popularity", 0) < min_pop:
-        return False
+    if not p.get("id"): return False
+    if not p.get("profile_path"): return False
+    if p.get("known_for_department") != "Acting": return False
+    if p.get("adult", False): return False
+    if not is_latin(p.get("name", "")): return False
+    if p.get("popularity", 0) < min_pop: return False
     return True
 
 def pick_16_random_stars_no_repeat():
     """
-    Tire 16 personnes aléatoires, en excluant toutes celles déjà utilisées.
-    Si on n'arrive plus à trouver 16 nouvelles (pool épuisée), on réinitialise la "saison".
+    Tire 16 personnes aléatoires qui n'ont jamais été utilisées (dans cette session).
+    Si impossible => retourne [].
     """
     used = set(st.session_state.memory_used_ids)
 
-    # Plusieurs tentatives: pages aléatoires + seuil popularité
+    # Plusieurs tentatives, de strict à plus large
     attempts = [
         {"pages": 16, "max_page": 250, "min_pop": 25},
-        {"pages": 20, "max_page": 300, "min_pop": 20},
-        {"pages": 26, "max_page": 350, "min_pop": 18},
+        {"pages": 22, "max_page": 350, "min_pop": 20},
+        {"pages": 28, "max_page": 450, "min_pop": 15},
     ]
 
     for cfg in attempts:
@@ -224,71 +254,50 @@ def pick_16_random_stars_no_repeat():
                 if not pid or pid in seen:
                     continue
                 seen.add(pid)
+
                 if pid in used:
                     continue
                 if not _is_candidate_person(p, cfg["min_pop"]):
                     continue
+
                 candidates.append(p)
 
         if len(candidates) >= 16:
             shuffled = sorted(candidates, key=lambda _: secrets.randbits(64))
             return shuffled[:16]
 
-    # Si impossible: pool "épuisée" => reset saison
-    st.session_state.memory_used_ids = []
-    st.session_state.memory_used_season += 1
-    st.toast(f"🔁 Saison réinitialisée (plus assez de nouvelles stars).", icon="🔄")
+    return []
 
-    # Re-essai sans exclusion
-    # (on garde quand même un filtre "connu")
-    pages = set()
-    while len(pages) < 20:
-        pages.add(secrets.randbelow(250) + 1)
-
-    candidates = []
-    seen = set()
-    for page in pages:
-        for p in fetch_people_page(page):
-            pid = p.get("id")
-            if not pid or pid in seen:
-                continue
-            seen.add(pid)
-            if not _is_candidate_person(p, 20):
-                continue
-            candidates.append(p)
-
-    if len(candidates) < 16:
-        return []
-
-    shuffled = sorted(candidates, key=lambda _: secrets.randbits(64))
-    return shuffled[:16]
-
-def start_memory_round():
+def start_memory_round() -> bool:
     """
-    Identique au rôle de 'Commencer' : reset total + nouvelles 16 célébrités + phase memorize
+    Démarre une manche mémoire.
+    Retourne True si OK, False si échec.
     """
     st.session_state.memory_round_id += 1
     st.session_state.memory_input_key = f"mem_input_{st.session_state.memory_round_id}"
 
-    # reset affichage
     st.session_state.memory_people = []
     st.session_state.memory_found = []
     st.session_state.memory_revealed_faces = []
     st.session_state.show_solution = False
     st.session_state.memory_reveal_locked = False
+    st.session_state.memory_error = ""
 
     people = pick_16_random_stars_no_repeat()
     if len(people) < 16:
-        st.error("❌ Impossible de générer 16 célébrités (filtre trop strict ou problème TMDB).")
-        return
+        st.session_state.memory_error = (
+            "❌ Plus assez de nouvelles célébrités disponibles avec les filtres actuels.\n\n"
+            "Solution : recharge la page pour relancer une nouvelle session, "
+            "ou je peux assouplir les filtres (popularité)."
+        )
+        return False
 
     st.session_state.memory_people = people
-
-    # Enregistrer définitivement ces IDs pour ne plus les revoir
     st.session_state.memory_used_ids += [p["id"] for p in people]
 
     st.session_state.phase = "memorize"
     st.session_state.start_time = time.time()
+    return True
 
 def reveal_face(person_id: int):
     if person_id not in st.session_state.memory_revealed_faces:
@@ -324,14 +333,14 @@ def memory_reveal_all():
 
 def memory_clear_all():
     """
-    Efface TOUT et met un écran vide avec seulement 🔄 Prochaine manche
+    Efface tout et met un écran vide: uniquement 'Prochaine manche'
     """
     st.session_state.show_solution = False
     st.session_state.memory_reveal_locked = False
-
     st.session_state.memory_people = []
     st.session_state.memory_found = []
     st.session_state.memory_revealed_faces = []
+    st.session_state.memory_error = ""
 
     k = st.session_state.memory_input_key
     if k in st.session_state:
@@ -340,7 +349,7 @@ def memory_clear_all():
     st.session_state.phase = "memory_empty"
 
 # =========================
-# QUIZ célébrités / films
+# QUIZ Célébrités / Films
 # =========================
 def get_valid_people_for_quiz():
     for _ in range(8):
@@ -451,7 +460,6 @@ st.title(f"⭐ {st.session_state.mode}")
 
 if st.session_state.mode == "Mémoire (16 visages)" and st.session_state.phase in ("memorize", "recall"):
     st.metric("🧠 Trouvés", f"{len(st.session_state.memory_found)} / 16")
-    st.caption(f"Saison: {st.session_state.memory_used_season} | Utilisés: {len(st.session_state.memory_used_ids)}")
 elif st.session_state.mode == "Mémoire (16 visages)" and st.session_state.phase == "memory_empty":
     st.metric("🧹 État", "Tout effacé")
 else:
@@ -464,11 +472,18 @@ if st.session_state.phase == "init":
     if st.button("▶️ Commencer", type="secondary"):
         if st.session_state.mode == "Célébrités":
             new_round_celeb_quiz()
+            st.rerun()
         elif st.session_state.mode == "Films":
             new_round_movie_quiz()
+            st.rerun()
         else:
-            start_memory_round()
-        st.rerun()
+            ok = start_memory_round()
+            if ok:
+                st.rerun()
+        st.stop()
+
+    if st.session_state.mode == "Mémoire (16 visages)" and st.session_state.memory_error:
+        st.error(st.session_state.memory_error)
 
 # =========================================================
 # MODE MEMOIRE
@@ -476,8 +491,11 @@ if st.session_state.phase == "init":
 elif st.session_state.mode == "Mémoire (16 visages)":
 
     if st.session_state.phase == "memory_empty":
-        # écran vide : uniquement prochaine manche
-        st.button("🔄 Prochaine manche", type="secondary", on_click=start_memory_round)
+        if st.button("🔄 Prochaine manche", type="secondary"):
+            ok = start_memory_round()
+            if ok:
+                st.rerun()
+            st.stop()
         st.stop()
 
     elif st.session_state.phase == "memorize":
@@ -504,6 +522,9 @@ elif st.session_state.mode == "Mémoire (16 visages)":
             st.rerun()
 
     elif st.session_state.phase == "recall":
+        if st.session_state.memory_error:
+            st.error(st.session_state.memory_error)
+
         st.text_input(
             "✍️ Écris un prénom / nom (séparés par virgules si tu veux)",
             key=st.session_state.memory_input_key,
@@ -511,14 +532,25 @@ elif st.session_state.mode == "Mémoire (16 visages)":
         )
 
         c1, c2, c3 = st.columns(3)
+
         with c1:
-            st.button("👀 Tout révéler", type="secondary", on_click=memory_reveal_all)
+            if st.button("👀 Tout révéler", type="secondary"):
+                memory_reveal_all()
+                st.rerun()
+                st.stop()
+
         with c2:
-            st.button("🧹 Tout effacer", type="secondary", on_click=memory_clear_all)
+            if st.button("🧹 Tout effacer", type="secondary"):
+                memory_clear_all()
+                st.rerun()
+                st.stop()
+
         with c3:
-            st.button("🔄 Prochaine manche", type="secondary",
-                      disabled=st.session_state.memory_reveal_locked,
-                      on_click=start_memory_round)
+            if st.button("🔄 Prochaine manche", type="secondary", disabled=st.session_state.memory_reveal_locked):
+                ok = start_memory_round()
+                if ok:
+                    st.rerun()
+                st.stop()
 
         if st.session_state.memory_reveal_locked:
             st.warning("⚠️ Tu as cliqué sur **👀 Tout révéler**. Clique sur **🧹 Tout effacer** avant **🔄 Prochaine manche**.")
@@ -560,6 +592,7 @@ elif st.session_state.mode == "Mémoire (16 visages)":
                             if st.button("👁️ Indice", key=f"hint_{rid}_{pid}"):
                                 reveal_face(pid)
                                 st.rerun()
+                                st.stop()
                             st.markdown("</div>", unsafe_allow_html=True)
 
         st.stop()
@@ -585,71 +618,35 @@ elif st.session_state.phase == "question":
 
         st.write("### 👤 Qui est-ce ?")
 
-        L, M, R = st.columns([1, 5, 1])
-        with M:
-            row1 = st.columns(2)
-            with row1[0]:
-                p = st.session_state.choices[0]
-                if st.button(p["name"], type="primary", key=f"celeb_{st.session_state.current_item['id']}_0"):
-                    check_answer_quiz(p["id"], "name")
-                    st.rerun()
-            with row1[1]:
-                p = st.session_state.choices[1]
-                if st.button(p["name"], type="primary", key=f"celeb_{st.session_state.current_item['id']}_1"):
-                    check_answer_quiz(p["id"], "name")
-                    st.rerun()
+        def on_pick(pid):
+            check_answer_quiz(pid, "name")
 
-            st.markdown("<div class='answers-row-gap'></div>", unsafe_allow_html=True)
-
-            row2 = st.columns(2)
-            with row2[0]:
-                p = st.session_state.choices[2]
-                if st.button(p["name"], type="primary", key=f"celeb_{st.session_state.current_item['id']}_2"):
-                    check_answer_quiz(p["id"], "name")
-                    st.rerun()
-            with row2[1]:
-                p = st.session_state.choices[3]
-                if st.button(p["name"], type="primary", key=f"celeb_{st.session_state.current_item['id']}_3"):
-                    check_answer_quiz(p["id"], "name")
-                    st.rerun()
+        render_answers_2x2(
+            st.session_state.choices,
+            "name",
+            key_prefix=f"celeb_{st.session_state.current_item['id']}",
+            on_pick=on_pick
+        )
 
         time.sleep(1)
         st.rerun()
 
-    else:
+    else:  # Films
         left, center, right = st.columns([1, 6, 1])
         with center:
             st.image(f"{IMG_MOVIE}{st.session_state.current_image}", width=820)
 
         st.write("### 🎬 Quel est ce film ?")
 
-        L, M, R = st.columns([1, 6, 1])
-        with M:
-            row1 = st.columns(2)
-            with row1[0]:
-                m = st.session_state.choices[0]
-                if st.button(m["title"], type="primary", key=f"movie_{st.session_state.current_item['id']}_0"):
-                    check_answer_quiz(m["id"], "title")
-                    st.rerun()
-            with row1[1]:
-                m = st.session_state.choices[1]
-                if st.button(m["title"], type="primary", key=f"movie_{st.session_state.current_item['id']}_1"):
-                    check_answer_quiz(m["id"], "title")
-                    st.rerun()
+        def on_pick(mid):
+            check_answer_quiz(mid, "title")
 
-            st.markdown("<div class='answers-row-gap'></div>", unsafe_allow_html=True)
-
-            row2 = st.columns(2)
-            with row2[0]:
-                m = st.session_state.choices[2]
-                if st.button(m["title"], type="primary", key=f"movie_{st.session_state.current_item['id']}_2"):
-                    check_answer_quiz(m["id"], "title")
-                    st.rerun()
-            with row2[1]:
-                m = st.session_state.choices[3]
-                if st.button(m["title"], type="primary", key=f"movie_{st.session_state.current_item['id']}_3"):
-                    check_answer_quiz(m["id"], "title")
-                    st.rerun()
+        render_answers_2x2(
+            st.session_state.choices,
+            "title",
+            key_prefix=f"movie_{st.session_state.current_item['id']}",
+            on_pick=on_pick
+        )
 
 # =========================
 # RESULT
